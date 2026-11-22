@@ -1,0 +1,1152 @@
+'use strict';
+
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
+const PLATFORMS = ['youtube', 'x', 'substack', 'web'];
+const ui = { hideCompleted: false, collection: 'all', platforms: new Set(PLATFORMS), topics: null, source: '', search: '', status: 'saved', page: 0, pageSize: 10, selected: new Set(), busy: false, detailId: null, preview: null };
+let data = null;
+let remoteIds = null;
+let loginTimer = null;
+let loginAttempts = 0;
+let detailOpener = null;
+let karakeepOpener = null;
+let connectionOpener = null;
+let xMissingImport = null;
+let readingScroll = 0;
+
+function captureFocus() {
+  const active = document.activeElement;
+  const row = active?.closest('.article-row');
+  if (row) return { article: row.dataset.id, action: active.dataset.action || 'title', index: [...row.parentElement.children].indexOf(row) };
+  if (active?.dataset.topic) return { topic: active.dataset.topic };
+  if (active?.id) return { id: active.id };
+  return null;
+}
+
+function restoreFocus(target) {
+  if (!target) return;
+  let element;
+  if (target.article) {
+    const rows = $$('.article-row');
+    const row = rows.find((item) => item.dataset.id === target.article) || rows[Math.min(target.index, rows.length - 1)];
+    element = row && [...row.querySelectorAll('button,input,a')].find((item) => item.dataset.action === target.action && !item.disabled);
+    element ||= row?.querySelector('.article-title');
+    if (!element) { element = $('#collection-title'); element.tabIndex = -1; }
+  } else if (target.topic) element = $$('[data-topic]').find((item) => item.dataset.topic === target.topic);
+  else if (target.id) element = document.getElementById(target.id);
+  if (element && !element.disabled) element.focus({ preventScroll: true });
+}
+
+function node(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function safeUrl(value) {
+  try {
+    const url = new URL(value);
+    return ['https:', 'http:'].includes(url.protocol) ? url.href : null;
+  } catch { return null; }
+}
+
+function formatDate(value, includeTime = false) {
+  if (!value) return 'Datum unbekannt';
+  const date = new Date(typeof value === 'number' ? value * 1000 : value);
+  if (Number.isNaN(date.getTime())) return 'Datum unbekannt';
+  return new Intl.DateTimeFormat('de-DE', includeTime ? { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' } : { day: '2-digit', month: 'short', year: 'numeric' }).format(date);
+}
+
+function notice(message, error = false) {
+  const inConnections = $('#connection-dialog').open || !$('#settings-view').hidden;
+  const target = $('.x-operation-dialog[open] .x-operation-notice')
+    || $(inConnections ? '#connection-notice' : '#notice');
+  target.textContent = message;
+  target.hidden = !message;
+  target.classList.toggle('error', error);
+  target.setAttribute('role', error ? 'alert' : 'status');
+  return target;
+}
+
+async function request(path, body) {
+  const options = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Triage-Request': '1' }, body: JSON.stringify(body) };
+  let response;
+  try { response = await fetch(path, { ...options, cache: 'no-store' }); }
+  catch { throw new Error('Die lokale Anwendung ist nicht erreichbar. Prüfe, ob sie noch läuft, und versuche es erneut.'); }
+  let result;
+  try { result = await response.json(); }
+  catch { throw new Error('Die Anwendung hat keine gültige Antwort geliefert. Bitte erneut versuchen.'); }
+  if (!response.ok) {
+    const message = typeof result.error === 'string' ? result.error : typeof result.message === 'string' ? result.message : 'Die Aktion konnte nicht abgeschlossen werden.';
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+  return result;
+}
+
+function applyState(result) {
+  if (!Array.isArray(result.articles) || !result.state) throw new Error('Der gespeicherte Stand konnte nicht gelesen werden.');
+  if (data && result.state.version < data.state.version) return;
+  data = { ...result, eligibleIds: Array.isArray(result.eligibleIds) ? result.eligibleIds : result.articles.map(a => a.id) };
+  remoteIds = Array.isArray(data.savedIds) ? new Set(data.savedIds) : (Array.isArray(data.state.remote?.starredIds) ? new Set(data.state.remote.starredIds) : null);
+  const available = new Set(data.articles.filter((article) => !isRemoved(article)).map((article) => article.id));
+  ui.selected = new Set([...ui.selected].filter((id) => available.has(id)));
+  render();
+}
+
+function choice(article) { return data.state.decisions?.[article.id]?.choice || ''; }
+function isRemoved(article) {
+  if (article.origin === 'x' && !Array.isArray(data.savedIds)) {
+    const remote = data.state.xRemote;
+    return Boolean(remote && remote.accountId === article.originAccountId && Array.isArray(remote.starredIds) && !remote.starredIds.includes(article.postId));
+  }
+  return remoteIds !== null && !remoteIds.has(article.id);
+}
+function isDecided(article) { return isRemoved(article) || ['keep', 'remove'].includes(choice(article)); }
+function topic(article) { return enrichment(article)?.topic || article.topic || 'Ohne Thema'; }
+function source(article) { return article.source || article.domain || article.publisher?.title || (article.origin === 'x' ? 'X' : 'Quelle unbekannt'); }
+function savedToKarakeep(article) { return Boolean(data.state.karakeepSaved?.[article.id]); }
+function karakeepLabel(article) {
+  if (!savedToKarakeep(article)) return 'In Karakeep speichern';
+  return choice(article) === 'remove' ? 'In Karakeep gespeichert ✓' : 'Gespeichert · erneut vormerken';
+}
+function karakeepDisabled(article) { return ui.busy || !safeUrl(article.url) || isRemoved(article) || (savedToKarakeep(article) && choice(article) === 'remove'); }
+function stats(articles) {
+  return {
+    total: articles.length,
+    decided: articles.filter(isDecided).length,
+    keep: articles.filter((a) => !isRemoved(a) && choice(a) === 'keep').length,
+    remove: articles.filter((a) => !isRemoved(a) && choice(a) === 'remove').length,
+    removed: articles.filter(isRemoved).length,
+    open: articles.filter((a) => !isDecided(a)).length,
+  };
+}
+
+function isXArticle(article) {
+  try { return ['x.com', 'www.x.com'].includes(new URL(article.url).hostname); }
+  catch { return false; }
+}
+function origin(article) { return article.origin === 'x' ? 'x' : 'inoreader'; }
+function destinationLabel(article) { return origin(article) === 'x' ? 'X' : 'Inoreader'; }
+function platform(article) {
+  let host;
+  try { host = new URL(article.url).hostname.toLowerCase(); }
+  catch { return 'web'; }
+  if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) return 'youtube';
+  if (['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com'].includes(host)) return 'x';
+  if (host === 'substack.com' || host.endsWith('.substack.com')) return 'substack';
+  return 'web';
+}
+function eligible(article) {
+  return (ui.collection === 'all' || origin(article) === ui.collection) && ui.platforms.has(platform(article));
+}
+function enrichment(article) { return data.xContent?.entries?.[article.id] || (article.origin === 'x' && article.summary ? article : null); }
+function displayTitle(article) { return enrichment(article)?.title || article.title || 'Ohne Titel'; }
+function displayText(article) { const e = enrichment(article); return [e?.summary, e?.text, article.text, article.excerpt, article.author].filter(Boolean).join(' '); }
+function scopedArticles() {
+  const query = ui.search.toLocaleLowerCase('de');
+  return data.articles.filter((a) => eligible(a) && matchesTopics(a) && (!ui.source || source(a) === ui.source) && (!query || [displayTitle(a), displayText(a), a.url, a.ref, source(a), topic(a)].join(' ').toLocaleLowerCase('de').includes(query)));
+}
+
+function filteredArticles() {
+  return scopedArticles().filter((a) => {
+    if (ui.status === 'all') return true;
+    if (ui.status === 'saved') return !isRemoved(a);
+    if (ui.status === 'open') return !isDecided(a);
+    return !isRemoved(a) && choice(a) === ui.status;
+  }).sort((a, b) => ui.status === 'open' ? Number(choice(a) === 'skip') - Number(choice(b) === 'skip') : 0);
+}
+
+function visibleArticles() {
+  const articles = filteredArticles();
+  ui.page = Math.max(0, Math.min(ui.page, Math.ceil(articles.length / ui.pageSize) - 1));
+  return articles.slice(ui.page * ui.pageSize, (ui.page + 1) * ui.pageSize);
+}
+
+function resetView() { ui.page = 0; ui.selected.clear(); render(); }
+
+function setCollection(collection) {
+  ui.collection = collection;
+  ui.source = ''; ui.search = ''; ui.status = 'saved';
+  $('#search').value = '';
+  resetView();
+}
+
+function setPlatforms(values) {
+  ui.platforms = new Set(values);
+  ui.source = '';
+  resetView();
+}
+
+function matchesTopics(article) { return ui.topics === null || ui.topics.has(topic(article)); }
+function setTopics(values) { ui.topics = values === null ? null : new Set(values); resetView(); }
+function toggleTopic(name, checked) {
+  const selected = ui.topics === null ? new Set(data.articles.map(topic)) : new Set(ui.topics);
+  if (checked) selected.add(name); else selected.delete(name);
+  setTopics(selected);
+  restoreFocus({ topic: name });
+}
+
+function xImportParameters() {
+  const posts = Number($('#x-import-posts').value);
+  const users = Number($('#x-import-users').value);
+  const pages = Number($('#x-import-pages').value);
+  const usd = Number($('#x-import-usd').value);
+  if (!Number.isSafeInteger(posts) || posts < 1 || posts > 100000 || !Number.isSafeInteger(users) || users < 0 || users > posts || !Number.isSafeInteger(pages) || pages < 1 || pages > 1000) {
+    throw new Error('Bitte gültige Obergrenzen eingeben: 1–100000 Beiträge, 1–1000 Seiten und höchstens ebenso viele Autor:innen wie Beiträge.');
+  }
+  if (!Number.isFinite(usd) || usd <= 0) throw new Error('Bitte ein positives Kostenlimit in USD eingeben.');
+  if (data.xImport?.restartRequired && !$('#x-import-restart').checked) throw new Error('Dieser Import braucht einen ausdrücklich bestätigten Neustart.');
+  return { posts, users, pages, usd,
+    verification_posts: 0, mutations: 0, maxPages: pages, maxResults: Math.min(posts, 100),
+    restart: Boolean($('#x-import-restart').checked) };
+}
+
+function updateXImportQuote() {
+  $('#x-import-approval').checked = false;
+  $('#confirm-x-import').disabled = true;
+  try {
+    const params = xImportParameters();
+    $('#x-import-quote').textContent = `Kostenlimit: ${params.usd.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 3 })} USD. Zusätzlich höchstens ${params.posts} Posts + ${params.users} Autor:innen / ${params.pages} Seiten. Der Import stoppt am Ende der X-Liste oder an der zuerst erreichten Grenze. Themen werden lokal zugeordnet.`;
+  } catch (error) { $('#x-import-quote').textContent = error.message; }
+}
+
+function openXImport() {
+  if (ui.busy || !data.xConnection?.connected) return;
+  const prior = data.xImport;
+  $('#x-import-description').textContent = prior?.restartRequired
+    ? 'Der Cursor ist nicht mehr verwendbar. Starte eine neue Inventur nur mit erneuter Kostenfreigabe. Gesicherte Einträge und Entscheidungen bleiben erhalten.'
+    : prior?.scanStarted ? 'Setzt die gespeicherte Teilinventur fort und ruft automatisch weitere Seiten ab, bis X das Ende meldet oder eine Grenze erreicht ist. Bereits bekannte Beiträge können erneut berechnet werden.'
+    : 'Ruft automatisch alle von X gelieferten Seiten ab, bis X das Ende meldet oder eine Grenze erreicht ist. Bestehende Entscheidungen und geprüfte Themen bleiben erhalten.';
+  $('#x-import-restart-label').hidden = !prior?.restartRequired;
+  $('#x-import-restart').checked = false;
+  updateXImportQuote();
+  $('#x-import-dialog').showModal();
+  notice('');
+}
+
+async function confirmXImport() {
+  if (ui.busy || !data.xConnection?.connected || !$('#x-import-approval').checked) {
+    notice('Bitte den angezeigten Kostenrahmen ausdrücklich bestätigen; X muss verbunden sein.', true);
+    return;
+  }
+  let params;
+  try { params = xImportParameters(); }
+  catch (error) { notice(error.message, true); return; }
+  notice('');
+  $('#confirm-x-import').disabled = true;
+  const result = await perform(() => request('/api/x/import', params));
+  $('#confirm-x-import').disabled = !$('#x-import-approval').checked;
+  if (result) {
+    $('#x-import-dialog').close();
+    const reason = result.xImport?.partialReason;
+    const stopped = reason === 'budget_exhausted' ? 'Kosten- oder Ressourcenlimit erreicht.' : reason === 'page_limit' ? 'Seitenlimit erreicht.' : 'X-Abruf noch unvollständig.';
+    notice(result.xImport?.complete ? 'Alle von X gelieferten Seiten importiert. Themen sind lokal zugeordnet; geprüfte Themen und Entscheidungen bleiben erhalten.' : `${stopped} Teilimport und Themen gesichert. Nach neuer Freigabe fortsetzen; fehlende Einträge gelten nicht als entfernt.`);
+  }
+}
+
+function filterProgress(kind, value) {
+  return stats(data.articles.filter(article => {
+    if (kind === 'collection') return value === 'all' || origin(article) === value;
+    if (kind === 'platform') return (ui.collection === 'all' || origin(article) === ui.collection) && platform(article) === value;
+    return eligible(article) && (kind === 'topic' ? topic(article) : source(article)) === value;
+  }));
+}
+function showFilterGroup(progress) { return !ui.hideCompleted || progress.open > 0; }
+
+function localProgressLabel(progress) {
+  return `${progress.decided} bearbeitet · ${progress.open} offen`;
+}
+
+function normalizeCompletedFilters() {
+  if (!ui.hideCompleted) return;
+  if (ui.collection !== 'all' && !filterProgress('collection', ui.collection).open) ui.collection = 'all';
+  if (ui.source && !filterProgress('source', ui.source).open) ui.source = '';
+  if (ui.topics?.size && ![...ui.topics].some(name => filterProgress('topic', name).open)) ui.topics = null;
+}
+
+function renderFilterCounts() {
+  for (const [selector, kind, attribute] of [
+    ['[data-collection]', 'collection', 'collection'], ['[data-platform]', 'platform', 'platform'],
+  ]) {
+    $$(selector).forEach(input => {
+      const value = input.dataset[attribute];
+      const progress = filterProgress(kind, value);
+      const label = input.closest('.filter-option');
+      label.hidden = !(kind === 'collection' && value === 'all') && !showFilterGroup(progress);
+      label.querySelector('.filter-item-count').textContent = kind === 'collection'
+        ? localProgressLabel(progress)
+        : `${progress.open} offen · ${progress.total} gesamt`;
+    });
+  }
+  $('#hide-completed').checked = ui.hideCompleted;
+}
+
+function renderTopics() {
+  const groups = new Map();
+  for (const article of data.articles.filter(eligible)) {
+    if (!groups.has(topic(article))) groups.set(topic(article), []);
+    groups.get(topic(article)).push(article);
+  }
+  for (const [name, articles] of groups) { if (!showFilterGroup(stats(articles))) groups.delete(name); }
+  const enabled = [...groups.keys()].filter(name => ui.topics === null || ui.topics.has(name)).length;
+  $('#topic-count').textContent = groups.size === 0 ? 'Keine Themen verfügbar' : `${enabled} von ${groups.size} aktiv`;
+  $('#topics').replaceChildren();
+  for (const [name, articles] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
+    const progress = stats(articles);
+    const entry = node('label', 'filter-option topic-option');
+    const text = node('span', 'filter-option-text');
+    text.append(node('span', '', name), node('span', 'small-count', `${progress.decided}/${progress.total} entschieden`));
+    const track = node('span', 'topic-mini-track');
+    track.setAttribute('aria-hidden', 'true');
+    const fill = node('span');
+    fill.style.width = `${progress.decided / progress.total * 100}%`;
+    track.append(fill);
+    text.append(track);
+    const input = node('input');
+    input.type = 'checkbox'; input.setAttribute('role', 'switch');
+    input.dataset.topic = name; input.setAttribute('aria-label', name);
+    input.checked = ui.topics === null || ui.topics.has(name);
+    input.addEventListener('change', () => toggleTopic(name, input.checked));
+    entry.append(text, input);
+    $('#topics').append(entry);
+  }
+}
+
+function renderSourceOptions() {
+  const names = [...new Set(data.articles.filter(eligible).map(source))].filter(name => showFilterGroup(filterProgress('source', name))).sort((a, b) => a.localeCompare(b, 'de'));
+  const options = [new Option('Alle Websites', ''), ...names.map((name) => { const p = filterProgress('source', name); return new Option(`${name} (${p.open} offen · ${p.total} gesamt)`, name); })];
+  $('#source').replaceChildren(...options);
+  $('#source').value = ui.source;
+  $('#source').closest('.source-field').hidden = names.length < 2;
+}
+
+function decisionLabel(article) {
+  if (isRemoved(article)) return `Aus ${origin(article) === 'x' ? 'X-Lesezeichen' : 'Inoreader „Später lesen“'} entfernt`;
+  return { keep: 'Behalten', remove: 'Zum Entfernen vorgemerkt', skip: 'Übersprungen · noch offen' }[choice(article)] || 'Noch offen';
+}
+
+function renderArticle(article) {
+  const row = node('article', `article-row${ui.selected.has(article.id) ? ' selected' : ''}`);
+  row.dataset.id = article.id;
+  const label = node('label', 'row-select');
+  const checkbox = node('input');
+  checkbox.type = 'checkbox';
+  checkbox.dataset.action = 'select';
+  checkbox.checked = ui.selected.has(article.id);
+  checkbox.disabled = ui.busy || isRemoved(article);
+  checkbox.setAttribute('aria-label', `Artikel auswählen: ${displayTitle(article)}`);
+  checkbox.addEventListener('change', () => {
+    if (checkbox.checked) ui.selected.add(article.id); else ui.selected.delete(article.id);
+    row.classList.toggle('selected', checkbox.checked);
+    renderSelection();
+  });
+  label.append(checkbox);
+  const content = node('div', 'article-main');
+  const title = node('button', 'article-title', displayTitle(article));
+  title.type = 'button';
+  title.dataset.action = 'title';
+  title.addEventListener('click', () => openDetails(article.id));
+  const meta = node('div', 'article-meta');
+  meta.append(node('span', 'source-name', source(article)), node('span', 'meta-separator', '·'), node('span', '', formatDate(article.published)), node('span', 'topic-tag', topic(article)));
+  if (choice(article) || isRemoved(article)) meta.append(node('span', `decision-tag ${isRemoved(article) ? 'removed' : choice(article)}`, decisionLabel(article)));
+  if (!enrichment(article)?.summary && article.missingContent) meta.append(node('span', 'missing-tag', 'Inhalt unklar'));
+  if (savedToKarakeep(article)) meta.append(node('span', 'decision-tag', 'In Karakeep gespeichert'));
+  content.append(title, meta);
+  const excerpt = enrichment(article)?.summary || enrichment(article)?.text || article.excerpt;
+  if (excerpt) content.append(node('p', 'article-excerpt', excerpt.replace(/\s+/g, ' ').trim()));
+  const url = safeUrl(article.url);
+  if (url) {
+    const original = node('a', 'button secondary row-original', 'Original öffnen ↗');
+    original.href = url;
+    original.target = '_blank';
+    original.rel = 'noopener noreferrer';
+    original.dataset.action = 'original';
+    content.append(original);
+    const save = node('button', 'button keep-button row-karakeep', karakeepLabel(article));
+    save.type = 'button';
+    save.dataset.action = 'karakeep';
+    save.title = `In Karakeep speichern und danach Entfernung aus ${destinationLabel(article)} vormerken`;
+    save.setAttribute('aria-label', `${karakeepLabel(article)}: ${displayTitle(article)}`);
+    save.disabled = karakeepDisabled(article);
+    save.addEventListener('click', () => saveToKarakeep(article.id));
+    content.append(save);
+  }
+  const actions = node('div', 'row-actions');
+  for (const [action, symbol, description] of [['keep', '✓', 'Behalten'], ['remove', '−', 'Zum Entfernen vormerken'], ['skip', '↷', 'Überspringen'], ['clear', '↶', 'Entscheidung zurücksetzen']]) {
+    if (action === 'clear' && !choice(article)) continue;
+    const button = node('button', `row-action ${action}${choice(article) === action ? ' chosen' : ''}`, symbol);
+    button.type = 'button';
+    button.dataset.action = action;
+    button.title = action === 'remove' ? `Erst nach „Entfernungen prüfen“ und deiner Bestätigung aus ${destinationLabel(article)} entfernen` : description;
+    button.setAttribute('aria-label', `${description}: ${displayTitle(article)}`);
+    if (action !== 'clear') button.setAttribute('aria-pressed', String(choice(article) === action));
+    button.disabled = ui.busy || isRemoved(article);
+    button.addEventListener('click', () => saveDecision([article.id], action));
+    actions.append(button);
+  }
+  const details = node('button', 'row-action details', '›');
+  details.type = 'button';
+  details.dataset.action = 'details';
+  details.title = 'Details öffnen';
+  details.setAttribute('aria-label', `Details öffnen: ${displayTitle(article)}`);
+  details.addEventListener('click', () => openDetails(article.id));
+  actions.append(details);
+  row.append(label, content, actions);
+  return row;
+}
+
+function renderSelection() {
+  const available = visibleArticles().filter((a) => !isRemoved(a));
+  const count = available.filter((a) => ui.selected.has(a.id)).length;
+  $('#select-all').checked = available.length > 0 && count === available.length;
+  $('#select-all').indeterminate = count > 0 && count < available.length;
+  $('#select-all').disabled = ui.busy || !available.length;
+  $('#selection-label').textContent = ui.selected.size ? `${ui.selected.size} ausgewählt` : 'Runde auswählen';
+  $('#batch-actions').hidden = !ui.selected.size;
+  $$('[data-batch]').forEach((button) => { button.disabled = ui.busy; });
+  $('#open-selected').disabled = ui.busy;
+  $('#karakeep-selected').disabled = !data.articles.some((a) => ui.selected.has(a.id) && !karakeepDisabled(a));
+  $('#karakeep-selected').title = 'Speichert die ausgewählten Links und merkt ihre Entfernung aus der jeweiligen Herkunft vor.';
+}
+
+function renderConnectionWarnings() {
+  const warnings = [];
+  for (const [key, label, connection] of [
+    ['inoreader', 'Inoreader', data.connection], ['x', 'X', data.xConnection],
+  ]) {
+    if (connection?.connected || !data.articles.some(a => origin(a) === key)) continue;
+    const pending = data.articles.filter(a => origin(a) === key && !isRemoved(a) && choice(a) === 'remove').length;
+    warnings.push(node('span', '', `${label} ist nicht verbunden. ${pending ? `${pending} vorgemerkt – diese Einträge werden dort noch nicht entfernt.` : 'Entfernungen können dort erst nach der Anmeldung abgeglichen werden.'}`));
+  }
+  $('#connection-warnings').replaceChildren(...warnings);
+  $('#connection-warning-panel').hidden = !warnings.length;
+  $('#connection-warnings').hidden = !warnings.length;
+}
+
+async function refreshConnectionStatus() {
+  if (ui.busy || document.hidden || !data) return;
+  try {
+    const latest = await request('/api/state');
+    if (ui.busy) return;
+    if (Boolean(latest.connection?.connected) !== Boolean(data.connection?.connected) ||
+        Boolean(latest.xConnection?.connected) !== Boolean(data.xConnection?.connected)) applyState(latest);
+  } catch { /* Keep the last known status; local-server failures surface on the next action. */ }
+}
+
+function showCurrentView() {
+  const settings = $('#settings-view');
+  const showSettings = window.location.hash === '#einstellungen';
+  if (settings.hidden === !showSettings) return;
+
+  const dialog = $('#connection-dialog');
+  if (dialog.open) dialog.close();
+  if (showSettings) readingScroll = window.scrollY;
+  $(showSettings ? '#settings-connections' : '#dialog-connections').append($('#connection-controls'));
+  renderConnectionCards();
+  settings.hidden = !showSettings;
+  $('#reading-view').hidden = showSettings;
+  (showSettings ? $('#settings-title') : $('#open-settings')).focus({preventScroll: true});
+  window.scrollTo(0, showSettings ? 0 : readingScroll);
+}
+
+function updateSyncAvailability() {
+  if (!ui.preview) return;
+  const groups = ui.preview.groups || {inoreader:{count:ui.preview.items.length,available:true},x:{count:0,available:false}};
+  const blocked = Object.entries(groups).filter(([, group]) => group.count && !group.available);
+  const available = Object.values(groups).reduce((sum, group) => sum + (group.available ? group.count : 0), 0);
+  const pending = blocked.reduce((sum, [, group]) => sum + group.count, 0);
+  $('#sync-connection-warning').textContent = blocked.map(([key, group]) => `${key === 'x' ? 'X' : 'Inoreader'} nicht verbunden: ${group.count} bleiben vorgemerkt und werden dort nicht entfernt.`).join(' ');
+  $('#sync-connection-warning').hidden = !pending;
+  $('#confirm-sync').textContent = available ? `${available} jetzt entfernen${pending ? ` · ${pending} bleiben offen` : ''}` : 'Zuerst die betroffenen Dienste verbinden';
+  $('#confirm-sync').disabled = ui.busy || !available || (groups.x.available && groups.x.count > 0 && !$('#sync-x-approval').checked);
+}
+
+function sourceInventorySnapshot(source) {
+  const snapshot = data.sourceInventory?.[source];
+  const membership = source === 'x' ? data.state.xRemote : data.state.remote;
+  if (Array.isArray(membership?.starredIds) && membership.checkedAt
+      && (!snapshot?.checkedAt || Date.parse(membership.checkedAt) >= Date.parse(snapshot.checkedAt))) {
+    const saved = new Set(membership.starredIds);
+    const imported = new Set(data.articles.filter(article => origin(article) === source
+      && (source !== 'x' || article.originAccountId === membership.accountId))
+      .map(article => source === 'x' ? article.postId : article.id));
+    const notImported = [...saved].filter(id => !imported.has(id)).length;
+    return {count: saved.size, coverage: 'complete', checkedAt: membership.checkedAt, notImported};
+  }
+  return snapshot;
+}
+
+function renderSourceInventory() {
+  for (const source of ['inoreader', 'x']) {
+    const connected = Boolean(source === 'x' ? data.xConnection?.connected : data.connection?.connected);
+    const item = sourceInventorySnapshot(source);
+    $(`#source-inventory-${source}-progress`).textContent = localProgressLabel(filterProgress('collection', source));
+    const sourceLabel = source === 'inoreader' ? 'bei Inoreader' : 'laut X-API';
+    const status = [item ? sourceLabel : `${sourceLabel} noch nicht geprüft`];
+    if (item) {
+      if (item.stale) status.push('Veraltet');
+      if (item.coverage === 'partial') status.push('Teilscan');
+      status.push(item.checkedAt ? formatDate(item.checkedAt, true) : 'Scanzeit unbekannt');
+    }
+    $(`#source-inventory-${source}-count`).textContent = item ? String(item.count) : '–';
+    const statusLabel = $(`#source-inventory-${source}-status`);
+    statusLabel.textContent = status.join(' · ');
+    statusLabel.classList.toggle('source-inventory-stale', Boolean(item?.stale));
+    $(`#source-inventory-${source}-missing`).textContent = item?.notImported == null
+      ? 'Noch nicht importiert · zuerst prüfen'
+      : `${item.notImported} noch nicht importiert`;
+    const importButton = $(`#source-inventory-${source}-import`);
+    importButton.disabled = ui.busy || !item?.notImported || !connected;
+    importButton.textContent = item?.notImported ? `${item.notImported} importieren` : 'Importieren';
+    const button = $(`#source-inventory-${source}-check`);
+    const name = source === 'x' ? 'X' : 'Inoreader';
+    button.disabled = ui.busy;
+    button.textContent = connected ? 'Jetzt prüfen' : `${name} verbinden`;
+    button.setAttribute('aria-label', connected ? `${name} jetzt prüfen` : button.textContent);
+    if (!connected || source === 'x') button.setAttribute('aria-haspopup', 'dialog');
+    else button.removeAttribute('aria-haspopup');
+  }
+}
+
+async function importMissing(source, snapshot, approval) {
+  notice('');
+  const result = await perform(() => request('/api/source-inventory/import', {
+    source, checkedAt: snapshot.checkedAt, ...(approval ? {approval} : {}),
+  }));
+  if (!result) return;
+  if (source === 'x') $('#x-missing-dialog').close();
+  const {count, requested} = result.importResult;
+  const imported = count === 1 ? '1 Lesezeichen importiert.' : `${count} Lesezeichen importiert.`;
+  notice(count === requested ? imported : `${imported} Die übrigen Einträge waren nicht verfügbar.`, count !== requested);
+  if ($(`#source-inventory-${source}-import`).disabled) {
+    $(`#source-inventory-${source}-check`).focus({preventScroll: true});
+  }
+}
+
+function refreshInoreader() {
+  if (!data || ui.busy) return;
+  notice('');
+  return perform(() => request('/api/refresh', {}), 'Inoreader-Stand und Leseliste abgeglichen.');
+}
+
+function render() {
+  if (!data) return;
+  normalizeCompletedFilters();
+  renderFilterCounts();
+  const overall = stats(data.articles.filter(eligible));
+  const percent = overall.total ? Math.round(overall.decided / overall.total * 1000) / 10 : 0;
+  $('#progress-percent').textContent = `${percent.toLocaleString('de-DE')} %`;
+  $('#overall-bar').style.width = `${percent}%`;
+  $('#overall-progress').textContent = `${overall.decided} von ${overall.total} bearbeitet · ${overall.open} offen`;
+  $('#keep-count').textContent = overall.keep;
+  $('#remove-count').textContent = overall.remove;
+  $('#done-count').textContent = remoteIds === null ? '–' : overall.removed;
+  $('#pending-count').textContent = overall.remove;
+  $('#saved-status').textContent = ui.busy ? 'Wird verarbeitet …' : '✓ Fortschritt lokal gespeichert';
+  renderConnectionWarnings();
+  renderSourceInventory();
+  renderTopics();
+  renderSourceOptions();
+  const groupArticles = data.articles.filter(a => eligible(a) && matchesTopics(a));
+  const activeTopics = [...new Set(groupArticles.map(topic))];
+  const collectionTitle = ui.collection === 'x' ? 'X-Lesezeichen' : ui.collection === 'inoreader' ? 'Inoreader-Leseliste' : 'Alle Beiträge';
+  let topicTitle = `${activeTopics.length} Themen ausgewählt`;
+  if (activeTopics.length === 1) topicTitle = activeTopics[0];
+  if (activeTopics.length === 0) topicTitle = 'Keine passenden Themen';
+  $('#collection-title').textContent = ui.topics === null ? collectionTitle : topicTitle;
+  const group = stats(groupArticles);
+  $('#topic-progress').textContent = `${group.decided} von ${group.total} entschieden · ${group.open} offen${ui.topics !== null ? ' in den gewählten Themen' : ' in deiner Sammlung'}`;
+  $('#open-count').textContent = stats(scopedArticles()).open;
+  $$('.status-tab').forEach((button) => {
+    button.classList.toggle('active', button.dataset.status === ui.status);
+    button.setAttribute('aria-pressed', String(button.dataset.status === ui.status));
+  });
+  const filtered = filteredArticles();
+  const visible = visibleArticles();
+  $('#article-list').replaceChildren(...visible.map(renderArticle));
+  if (!visible.length) {
+    const empty = node('div', 'empty-state');
+    const isAllDone = group.total > 0 && !ui.search && !ui.source && ui.status === 'open' && group.open === 0;
+    empty.append(node('span', 'empty-icon', isAllDone ? '✓' : '⌕'), node('h3', '', isAllDone ? 'Ein Stück leichter.' : 'Hier gibt es gerade keine Artikel.'), node('p', '', isAllDone ? 'Alles in dieser Ansicht ist entschieden. Vorgemerkte Entfernungen kannst du oben prüfen und anschließend für die jeweilige Herkunft bestätigen.' : ui.platforms.size === 0 ? 'Alle Plattformen sind ausgeschaltet. Schalte eine Plattform oder „Alle an“ ein.' : ui.topics?.size === 0 ? 'Alle Themen sind ausgeschaltet. Schalte ein Thema oder „Alle an“ ein.' : 'Wähle ein anderes Thema, ändere den Filter oder verkürze deine Suche.'));
+    $('#article-list').append(empty);
+  }
+  $('#result-count').textContent = `${filtered.length} Artikel`;
+  const pages = Math.max(1, Math.ceil(filtered.length / ui.pageSize));
+  $('#page-label').textContent = `Runde ${ui.page + 1} von ${pages}`;
+  $('#previous-page').disabled = ui.page === 0 || ui.busy;
+  $('#next-page').disabled = ui.page + 1 >= pages || ui.busy;
+  $('#undo').disabled = ui.busy || !data.state.history?.length;
+  $('#preview').disabled = ui.busy || !overall.remove;
+  $('#snapshot-label').textContent = `${data.articles.filter(eligible).length} Einträge in dieser Herkunftsansicht · Inoreader-Ausgangsstand: ${formatDate(data.fetchedAt)}${data.state.xRemote?.checkedAt ? ` · X-Inventur: ${formatDate(data.state.xRemote.checkedAt, true)}` : ' · X-Live-Stand ungeprüft'}`;
+  $$('[data-collection]').forEach(button => {
+    button.checked = button.dataset.collection === ui.collection;
+  });
+  $$('[data-platform]').forEach(input => {
+    input.checked = ui.platforms.has(input.dataset.platform);
+  });
+  $('#platform-count').textContent = ui.platforms.size === PLATFORMS.length ? 'Alle Plattformen' :
+    ui.platforms.size === 0 ? 'Keine Plattform' : `${ui.platforms.size} von ${PLATFORMS.length} aktiv`;
+  const collectionCount = $('#collection-all-count');
+  if (collectionCount) collectionCount.textContent = data.articles.length;
+  const xCount = $('#collection-x-count');
+  if (xCount) xCount.textContent = data.articles.filter(isXArticle).length;
+  const connection = data.connection || {};
+  $('#connection-message').textContent = connection.message || (connection.connected ? 'Verbunden. Du kannst den aktuellen Stand prüfen.' : 'Deine Entscheidungen bleiben bis zur Bestätigung lokal.');
+  $('#connection-dot').classList.toggle('connected', Boolean(connection.connected));
+  $('#connect').hidden = Boolean(connection.connected);
+  $('#refresh').hidden = !connection.connected;
+  $('#connect').disabled = ui.busy || !connection.ready;
+  $('#refresh').disabled = ui.busy || !connection.connected;
+  const xConnection = data.xConnection || {};
+  $('#x-connection-message').textContent = xConnection.message || 'X ist nicht verbunden.';
+  $('#x-connection-dot').classList.toggle('connected', Boolean(xConnection.connected));
+  $('#x-connection-fields').hidden = Boolean(xConnection.connected);
+  $('#x-disconnect').hidden = !xConnection.connected;
+  $('#x-import').disabled = ui.busy || !xConnection.connected;
+  $('#x-check').disabled = ui.busy || !xConnection.connected;
+  $('#x-operations-help').textContent = xConnection.connected
+    ? 'Für den Abruf über die X-API legst du zuerst ein Kostenlimit fest.'
+    : 'Verbinde X, um den Import oder die Live-Prüfung zu starten.';
+  const imported = data.xImport;
+  $('#x-import-status').textContent = !imported?.count && !imported?.scanStarted ? 'Noch keine X-Lesezeichen importiert.' : `${imported?.count || 0} lokal gespeichert · ${imported?.complete ? 'API-Inventur vollständig' : imported?.restartRequired ? 'Teilimport · expliziter Neustart nötig' : 'Teilimport · Fortsetzung möglich'}`;
+  $('#x-import').textContent = imported?.restartRequired ? 'X-Gesamtimport neu starten' : imported?.scanStarted ? 'X-Gesamtimport fortsetzen' : 'Alle X-Lesezeichen importieren';
+  $('#x-connect').disabled = ui.busy;
+  $('#x-disconnect').disabled = ui.busy;
+  renderConnectionCards();
+  renderSelection();
+  if (ui.detailId && $('#detail-dialog').open) renderDetails();
+}
+
+function openKarakeepConnection() {
+  karakeepOpener = captureFocus();
+  $('#karakeep-key').value = '';
+  $('#karakeep-error').hidden = true;
+  $('#karakeep-dialog').showModal();
+  $('#karakeep-key').focus();
+}
+
+async function connectKarakeep() {
+  if (ui.busy) return;
+  let apiKey = $('#karakeep-key').value.trim();
+  $('#karakeep-key').value = '';
+  if (!apiKey) { $('#karakeep-error').textContent = 'Bitte deinen Karakeep-Schlüssel eingeben.'; $('#karakeep-error').hidden = false; return; }
+  $('#karakeep-error').hidden = true;
+  $('#confirm-karakeep').disabled = true;
+  $('#karakeep-key').disabled = true;
+  $('#close-karakeep').disabled = true;
+  const result = await perform(() => {
+    const pending = request('/api/karakeep/connect', { apiKey });
+    apiKey = '';
+    return pending;
+  }, 'Karakeep ist verbunden. Wähle jetzt beim gewünschten Artikel „In Karakeep speichern“.');
+  $('#confirm-karakeep').disabled = false;
+  $('#karakeep-key').disabled = false;
+  $('#close-karakeep').disabled = false;
+  if (result) $('#karakeep-dialog').close();
+  else { $('#karakeep-error').textContent = $('#notice').textContent; $('#karakeep-error').hidden = false; $('#karakeep-key').focus(); }
+}
+
+async function saveToKarakeep(id) {
+  const article = data.articles.find((item) => item.id === id);
+  if (!article || karakeepDisabled(article)) return;
+  if (!data.karakeep?.connected) { openKarakeepConnection(); return; }
+  const result = await perform(async () => {
+    try { return await request('/api/karakeep/save', { version: data.state.version, id }); }
+    catch (error) { if (error.status === 401) data.karakeep.connected = false; throw error; }
+  }, (response) => response.result?.message || 'In Karakeep gespeichert. Entfernung aus Inoreader ist vorgemerkt und wartet auf deine Bestätigung.');
+  if (result) {
+    const focusBefore = captureFocus();
+    ui.selected.delete(id);
+    render();
+    if (!document.querySelector('dialog[open]')) restoreFocus(focusBefore);
+  }
+}
+
+async function saveSelectedToKarakeep() {
+  if (ui.busy) return;
+  const articles = data.articles.filter((a) => ui.selected.has(a.id) && !karakeepDisabled(a));
+  if (!articles.length) return;
+  if (!data.karakeep?.connected) { openKarakeepConnection(); return; }
+  let saved = 0;
+  let failure = '';
+  await perform(async () => {
+    for (const article of articles) {
+      notice(`In Karakeep speichern: ${saved} von ${articles.length} bestätigt …`);
+      try {
+        const result = await request('/api/karakeep/save', { version: data.state.version, id: article.id });
+        ui.selected.delete(article.id);
+        applyState(result);
+        saved += 1;
+      } catch (error) {
+        failure = error.message;
+        try { applyState(await request('/api/state')); }
+        catch { failure += ' Der aktuelle Stand konnte nicht erneut geladen werden.'; }
+        if (error.status === 401) data.karakeep.connected = false;
+        ui.selected = new Set(articles.slice(saved).filter((a) => !isRemoved(a)).map((a) => a.id));
+        break;
+      }
+    }
+    return data;
+  });
+  notice(`${saved} von ${articles.length} Artikeln in Karakeep gespeichert und zum Entfernen vorgemerkt. ${failure ? `Angehalten: ${failure} Die übrigen Artikel bleiben ausgewählt; es wurde nichts automatisch erneut gesendet.` : 'Die Entfernung aus Inoreader bestätigst du separat über „Entfernungen prüfen“.'}`, Boolean(failure));
+}
+
+async function perform(operation, message) {
+  if (ui.busy) return;
+  const focusBefore = captureFocus();
+  ui.busy = true;
+  render();
+  try {
+    const result = await operation();
+    applyState(result);
+    if (message) notice(typeof message === 'function' ? message(result) : message);
+    return result;
+  } catch (error) {
+    if (error.status === 409) {
+      try { applyState(await request('/api/state')); }
+      catch (reloadError) { notice(reloadError.message, true); return null; }
+      notice('Der Stand wurde in einem anderen Fenster geändert. Die aktuelle Version ist geladen; deine letzte Aktion wurde nicht übernommen.', true);
+    } else notice(error.message, true);
+    return null;
+  } finally {
+    ui.busy = false;
+    render();
+    if (!document.querySelector('dialog[open]') && document.activeElement === document.body) restoreFocus(focusBefore);
+  }
+}
+
+async function saveDecision(ids, nextChoice) {
+  const actionable = ids.filter((id) => data.articles.some((a) => a.id === id && !isRemoved(a)));
+  if (!actionable.length) return;
+  const labels = { keep: 'behalten', remove: 'zum Entfernen vorgemerkt', skip: 'übersprungen – weiterhin offen', clear: 'zurückgesetzt' };
+  const result = await perform(() => request('/api/decisions', { version: data.state.version, ids: actionable, choice: nextChoice }), `${actionable.length} Artikel ${labels[nextChoice]}. Lokal gespeichert.`);
+  if (result) {
+    const focusBefore = captureFocus();
+    ui.selected.clear();
+    render();
+    if (!document.querySelector('dialog[open]') && document.activeElement === document.body) restoreFocus(focusBefore);
+  }
+}
+
+async function fetchXContent() {
+  if (!ui.detailId) return;
+  await perform(() => request('/api/fetch-x', { id: ui.detailId }), 'X-Inhalt lokal abgerufen (Rohtext, Status Teilabruf). Eine geprüfte Zusammenfassung wird später ergänzt; es wird nichts erfunden.');
+}
+
+function openDetails(id) {
+  detailOpener = captureFocus();
+  ui.detailId = id;
+  renderDetails();
+  $('#detail-dialog').showModal();
+}
+
+function renderDetails() {
+  const article = data.articles.find((a) => a.id === ui.detailId);
+  if (!article) { $('#detail-dialog').close(); return; }
+  $('#detail-ref').textContent = `ARTIKEL ${article.ref || ''}`;
+  $('#detail-title').textContent = displayTitle(article);
+  $('#detail-meta').textContent = `Herkunft: ${origin(article) === 'x' ? 'X-Lesezeichen' : 'Inoreader'} · Plattform: ${{youtube:'YouTube',x:'X',substack:'Substack',web:'Webseite / Sonstiges'}[platform(article)]} · ${source(article)} · ${article.author || 'Autor nicht mitgeliefert'} · ${formatDate(article.published || article.createdAt)} · ${topic(article)}`;
+  $('#detail-status').textContent = decisionLabel(article);
+  $('#detail-karakeep').textContent = karakeepLabel(article);
+  $('#detail-karakeep').disabled = karakeepDisabled(article);
+  const url = safeUrl(article.url);
+  $('#detail-link').hidden = !url;
+  if (url) $('#detail-link').href = url; else $('#detail-link').removeAttribute('href');
+  const content = enrichment(article);
+  const native = origin(article) === 'x';
+  $('#detail-dialog .karakeep-note').textContent = `Speichert den Link und merkt anschließend die Entfernung aus ${native ? 'X-Lesezeichen' : 'Inoreader „Später lesen“'} vor. Die Herkunft ändert sich erst nach eigener Vorschau und Bestätigung.`;
+  $('#detail-dialog .drawer-note').textContent = 'Entfernen betrifft nur die gespeicherte Zuordnung in der jeweiligen Herkunft, nicht den ursprünglichen Beitrag.';
+  $('#detail-excerpt').textContent = content?.text?.trim() || article.text?.trim() || article.excerpt?.trim() || (native ? 'Kein lesbarer Rohtext mitgeliefert; Auswertung fehlt.' : 'Für diesen Artikel ist kein lesbarer Auszug vorhanden.');
+  $('#detail-missing').hidden = native ? Boolean(content?.summary) : (!isXArticle(article) || content?.status === 'read');
+  $('#detail-missing').textContent = native ? (content?.summary ? 'Zusammenfassung vorhanden; Rohtext und Einschränkungen siehe unten.' : 'Rohtext; Auswertung fehlt. Es wird keine Zusammenfassung erfunden.') : (content ? `X-Inhalt: ${content.status === 'partial' ? 'Teilweise lesbar – Einschränkungen stehen unten.' : content.status === 'unavailable' ? 'Nicht verfügbar. Erneut abrufen ist möglich.' : 'Angereichert.'}` : 'Noch nicht abgerufen. „X-Inhalt abrufen“ lädt nur den Rohtext und erfindet keine Zusammenfassung.');
+  const fetchButton = $('#detail-fetch-x');
+  fetchButton.hidden = native || !isXArticle(article) || content?.status === 'read' || content?.status === 'partial';
+  fetchButton.disabled = ui.busy;
+  const fields = enrichment(article) || (native ? article : null);
+  const parts = [];
+  if (fields) {
+    if (fields.title) parts.push(`Titel: ${fields.title}`);
+    if (fields.author) parts.push(`Autor (Quelle): ${fields.author}`);
+    if (fields.topic) parts.push(`Thema: ${fields.topic}`);
+    if (fields.summary) parts.push(`Zusammenfassung des Beitrags: ${fields.summary}`);
+    if (fields.takeaway) parts.push(`Takeaway (Redaktion): ${fields.takeaway}`);
+    if (fields.assessment) parts.push(`Einschätzung (Redaktion): ${fields.assessment}`);
+    if (Array.isArray(fields.limitations) && fields.limitations.length) parts.push(`Grenzen: ${fields.limitations.join('; ')}`);
+  }
+  if (native) {
+    parts.push(`Sichtbarkeit: ${article.visibility === 'public' ? 'öffentlich bestätigt' : article.visibility === 'protected' ? 'geschützt; keine öffentliche Nachladung' : 'ungeklärt; keine öffentliche Nachladung'}`);
+    if (fields !== article && Array.isArray(article.limitations)) parts.push(`Abrufgrenzen: ${article.limitations.join('; ')}`);
+  }
+  $('#detail-enrichment').hidden = !parts.length;
+  $('#detail-enrichment').textContent = parts.join('\n');
+  const duplicates = Array.isArray(article.duplicateRefs) ? article.duplicateRefs : [];
+  $('#detail-duplicates').hidden = !duplicates.length;
+  $('#detail-duplicates').textContent = `Dieselbe URL ist auch bei Artikel ${duplicates.join(', ')} gespeichert. Die Einträge bleiben getrennt entscheidbar.`;
+  $$('[data-detail]').forEach((button) => {
+    button.disabled = ui.busy || isRemoved(article) || (button.dataset.detail === 'clear' && !choice(article));
+    if (button.dataset.detail !== 'clear') button.setAttribute('aria-pressed', String(choice(article) === button.dataset.detail));
+  });
+}
+
+async function showPreview() {
+  if (ui.busy) return;
+  ui.busy = true;
+  render();
+  try {
+    applyState(await request('/api/state'));
+    ui.preview = await request('/api/sync/preview');
+    if (!Array.isArray(ui.preview.items)) throw new Error('Die Vorschau konnte nicht geladen werden.');
+    const groups = ui.preview.groups || {inoreader:{count:ui.preview.items.length,available:true},x:{count:0,available:false}};
+    const xCount = groups.x.count || 0;
+    $('#sync-description').textContent = `${groups.inoreader.count} Inoreader-Einträge${groups.inoreader.available ? '' : ' (derzeit nicht verbunden)'} und ${xCount} X-Lesezeichen${groups.x.available ? '' : xCount ? ' (nicht verbunden; bleiben vorgemerkt)' : ''}. Nur verbundene Quellen werden bearbeitet; nicht verfügbare Einträge bleiben vorgemerkt.`;
+    $('#sync-items').replaceChildren(...ui.preview.items.map((article) => {
+      const item = node('li', '', article.title || 'Ohne Titel');
+      item.append(node('span', '', `Herkunft: ${origin(article) === 'x' ? 'X' : 'Inoreader'} · #${article.ref || '–'} · ${source(article)}`));
+      return item;
+    }));
+    $('#sync-error').hidden = true;
+    const cost = ui.preview.xCost || {deleteUsdEach:.010,verificationPostUsdEach:.005,verificationPosts:xCount,pages:1};
+    $('#sync-x-controls').hidden = !(groups.x.available && xCount);
+    $('#sync-x-approval').checked = false;
+    $('#sync-x-posts').value = String(cost.verificationPosts);
+    $('#sync-x-pages').value = String(cost.pages);
+    updateSyncQuote();
+    updateSyncAvailability();
+    $('#sync-dialog').showModal();
+  } catch (error) { notice(error.message, true); }
+  finally { ui.busy = false; render(); updateSyncAvailability(); }
+}
+
+function removalBudget() {
+  const groups=ui.preview.groups, xCount=groups?.x?.available?groups.x.count:0;
+  const posts=Number($('#sync-x-posts').value), pages=Number($('#sync-x-pages').value);
+  if(xCount&&(!Number.isSafeInteger(posts)||posts<1||!Number.isSafeInteger(pages)||pages<1)) throw new Error('Bitte positive ganzzahlige Obergrenzen für Rückprüfposts und Seiten eingeben.');
+  const verification_posts=xCount?posts:0;
+  const mills=xCount*10+verification_posts*5;
+  return {posts:0,users:0,mutations:xCount,verification_posts,pages:xCount?pages:0,usd:mills/1000};
+}
+function updateSyncQuote() {
+  if(!ui.preview)return;
+  $('#sync-x-approval').checked=false;
+  try { const b=removalBudget(); $('#sync-x-quote').textContent=`${b.mutations} X-DELETE + höchstens ${b.verification_posts} Verifikationsposts / ${b.pages} Seiten · maximal ${b.usd.toFixed(3)} USD. Teilbestätigung ist möglich; keine automatische Wiederholung. Nach jedem Versuch ist eine neue Vorschau nötig.`; }
+  catch(e){$('#sync-x-quote').textContent=e.message;}
+  updateSyncAvailability();
+}
+
+async function sync() {
+  if (!ui.preview || ui.busy) return;
+  updateSyncAvailability();
+  if ($('#confirm-sync').disabled) return;
+  const preview=ui.preview;
+  let budget; try{budget=removalBudget();}catch(e){notice(e.message,true);return;}
+  const xCount=preview.groups?.x?.available?preview.groups.x.count:0;
+  if(xCount&&!$('#sync-x-approval').checked){notice('Bitte den X-Lösch- und Verifikationsrahmen ausdrücklich bestätigen.',true);return;}
+  $('#confirm-sync').disabled = true;
+  $('#confirm-sync').textContent = 'Wird je Herkunft geprüft …';
+  $('#cancel-sync').disabled = true;
+  $('#close-sync').disabled = true;
+  ui.preview=null;
+  const result = await perform(() => request('/api/sync', { version: preview.version, ids: preview.items.map((article) => article.id), confirmationToken: preview.confirmationToken, catalogRevision: preview.catalogRevision, ...budget }));
+  $('#cancel-sync').disabled = false;
+  $('#close-sync').disabled = false;
+  if (result) {
+    $('#sync-dialog').close();
+    const confirmed = result.result?.confirmed?.length ?? 0;
+    const unconfirmed = result.result?.unconfirmed?.length ?? 0;
+    notice(result.result?.message || `${confirmed} Entfernungen bestätigt.${unconfirmed ? ` ${unconfirmed} konnten noch nicht bestätigt werden. Prüfe den Live-Stand erneut.` : ''}`, unconfirmed > 0);
+    ui.preview = null;
+  } else {
+    $('#sync-error').textContent = 'Der Versuch wurde nicht bestätigt. Die Einmal-Vorschau ist verbraucht. Bitte schließe den Dialog und lade eine neue Vorschau; es erfolgt kein automatischer Wiederholungsversuch.';
+    $('#sync-error').hidden = false;
+    $('#confirm-sync').textContent = 'Erneute Vorschau erforderlich';
+    $('#confirm-sync').disabled = true;
+  }
+}
+
+function showXCheck() {
+  if(ui.busy||!data.xConnection?.connected)return;
+  $('#x-check-posts').value=String(Math.max(100,data.xImport?.count||0));
+  $('#x-check-pages').value=String(Math.max(1,Math.ceil((data.xImport?.count||0)/100)));
+  updateXCheckQuote(); $('#x-check-dialog').showModal();
+  notice('');
+}
+function xCheckBudget() {
+  const posts=Number($('#x-check-posts').value),pages=Number($('#x-check-pages').value);
+  if(!Number.isSafeInteger(posts)||posts<1||!Number.isSafeInteger(pages)||pages<1)throw new Error('Bitte positive ganzzahlige Obergrenzen für Prüfposts und Seiten eingeben.');
+  return {posts:0,users:0,mutations:0,verification_posts:posts,pages,usd:Math.round(posts*5)/1000};
+}
+function updateXCheckQuote() {
+  $('#x-check-approval').checked = false;
+  $('#confirm-x-check').disabled = true;
+  try {
+    const budget = xCheckBudget();
+    const cost = budget.usd.toLocaleString('de-DE', {minimumFractionDigits: 2, maximumFractionDigits: 3});
+    const pages = budget.pages === 1 ? '1 Seite' : `${budget.pages} Seiten`;
+    $('#x-check-quote').textContent = `Höchstens ${budget.verification_posts} Prüfposts auf ${pages} · maximal ${cost} USD. Bei einem unvollständigen Ergebnis bleibt die Mitgliedschaft unbekannt.`;
+  } catch (error) {
+    $('#x-check-quote').textContent = error.message;
+  }
+}
+async function runXCheck(){
+  if(ui.busy||!data.xConnection?.connected)return;let budget;try{budget=xCheckBudget();}catch(e){notice(e.message,true);return;}
+  if(!$('#x-check-approval').checked){notice('Bitte den reinen Lese-Kostenrahmen ausdrücklich bestätigen.',true);return;}
+  notice('');
+  const result=await perform(()=>request('/api/x/check',budget));
+  if (result) {
+    $('#x-check-dialog').close();
+    notice(result.xMembership?.complete
+      ? 'X-Stand aktualisiert.'
+      : 'X-Prüfung unvollständig. Die Anzeige behält den letzten erfassten Stand.', !result.xMembership?.complete);
+  }
+}
+
+function renderConnectionCards() {
+  const dialog = $('#connection-dialog');
+  const source = dialog.dataset.source;
+  const irCard = $('#inoreader-connection-card');
+  const xCard = $('#x-connection-card');
+  irCard.hidden = Boolean(dialog.open && (source === 'x' || data?.connection?.connected));
+  xCard.hidden = Boolean(dialog.open && (source === 'inoreader' || data?.xConnection?.connected));
+  if (dialog.open && irCard.hidden && xCard.hidden) dialog.close();
+}
+
+function openConnections(opener, source = '') {
+  connectionOpener = opener;
+  opener.focus({preventScroll: true});
+  const dialog = $('#connection-dialog');
+  dialog.dataset.source = source;
+  dialog.showModal();
+  renderConnectionCards();
+}
+
+async function pollConnection() {
+  if (ui.busy) { loginTimer = setTimeout(pollConnection, 2000); return; }
+  try {
+    applyState(await request('/api/state'));
+    if (data.connection?.connected) { notice('Inoreader ist verbunden. Prüfe den Live-Stand, bevor du Entfernungen bestätigst.'); loginTimer = null; return; }
+  } catch { /* A temporary connection error must not erase local decisions. */ }
+  loginAttempts += 1;
+  if (loginAttempts < 60) loginTimer = setTimeout(pollConnection, 3000);
+  else { loginTimer = null; notice('Die Anmeldung ist noch nicht bestätigt. Nach der Anmeldung kannst du diese Seite neu laden.'); }
+}
+
+async function connect() {
+  if (ui.busy) return;
+  // Reserve the tab during the user gesture so browser popup protection permits login.
+  const loginWindow = window.open('about:blank', '_blank');
+  if (loginWindow) loginWindow.opener = null;
+  ui.busy = true;
+  render();
+  try {
+    const result = await request('/api/connect', {});
+    const url = safeUrl(result.url);
+    if (!url) throw new Error('Die Anmeldeadresse ist ungültig.');
+    if (loginWindow) loginWindow.location.replace(url);
+    else {
+      const message = notice('Der Browser hat das Anmeldefenster blockiert. Öffne die Anmeldung hier:');
+      const link = node('a', '', 'Inoreader-Anmeldung öffnen');
+      link.href = url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      message.append(document.createTextNode(' '), link);
+    }
+    if (loginWindow) notice('Die Inoreader-Anmeldung ist in einem neuen Tab geöffnet. Diese Seite wartet auf die Verbindung.');
+    if (loginTimer) clearTimeout(loginTimer);
+    loginAttempts = 0;
+    loginTimer = setTimeout(pollConnection, 2000);
+  } catch (error) { if (loginWindow) loginWindow.close(); notice(error.message, true); }
+  finally { ui.busy = false; render(); }
+}
+
+$('#all-topics').addEventListener('click', () => setTopics(null));
+$('#hide-completed').addEventListener('change', event => {
+  ui.hideCompleted = event.target.checked;
+  resetView();
+});
+// Connection event bindings
+$('#source-inventory-inoreader-check').addEventListener('click', event => {
+  if (!data || ui.busy) return;
+  if (data.connection?.connected) refreshInoreader();
+  else openConnections(event.currentTarget, 'inoreader');
+});
+$('#source-inventory-inoreader-import').addEventListener('click', () => {
+  const snapshot = sourceInventorySnapshot('inoreader');
+  if (!ui.busy && data.connection?.connected && snapshot?.notImported) importMissing('inoreader', snapshot);
+});
+$('#source-inventory-x-import').addEventListener('click', () => {
+  const snapshot = sourceInventorySnapshot('x');
+  if (ui.busy || !data.xConnection?.connected || !snapshot?.notImported) return;
+  const posts = snapshot.notImported;
+  const usd = posts * 5 / 1000;
+  xMissingImport = {snapshot, approval: {posts, usd}};
+  const cost = usd.toLocaleString('de-DE', {minimumFractionDigits: 2, maximumFractionDigits: 3});
+  $('#x-missing-description').textContent = `X kann den Abruf für ${posts} Lesezeichen berechnen. Kostenlimit für diesen Import: ${cost} USD.`;
+  $('#x-missing-dialog').showModal();
+  notice('');
+});
+$('#confirm-x-missing').addEventListener('click', async () => {
+  if (ui.busy || !xMissingImport) return;
+  $('#confirm-x-missing').disabled = true;
+  await importMissing('x', xMissingImport.snapshot, xMissingImport.approval);
+  $('#confirm-x-missing').disabled = false;
+});
+$('#cancel-x-missing').addEventListener('click', () => { if (!ui.busy) $('#x-missing-dialog').close(); });
+$('#x-missing-dialog').addEventListener('cancel', event => { if (ui.busy) event.preventDefault(); });
+$('#x-missing-dialog').addEventListener('close', () => { xMissingImport = null; });
+$('#source-inventory-x-check').addEventListener('click', (event) => {
+  if (!data || ui.busy) return;
+  if (data.xConnection?.connected) showXCheck();
+  else openConnections(event.currentTarget, 'x');
+});
+$('#show-connections').addEventListener('click', event => openConnections(event.currentTarget));
+$('#close-connections').addEventListener('click', () => $('#connection-dialog').close());
+$('#connection-dialog').addEventListener('close', () => {
+  renderConnectionCards();
+  if ($('#settings-view').hidden && connectionOpener?.closest('[hidden]')) {
+    $('#open-settings').focus({preventScroll: true});
+  }
+  connectionOpener = null;
+});
+window.addEventListener('hashchange', showCurrentView);
+showCurrentView();
+window.addEventListener('focus', refreshConnectionStatus);
+document.addEventListener('visibilitychange', refreshConnectionStatus);
+setInterval(refreshConnectionStatus, 30000);
+
+$('#no-topics').addEventListener('click', () => setTopics([]));
+$('#toggle-filters').addEventListener('click', (event) => {
+  const expanded = $('#reading-view').classList.toggle('filters-open');
+  event.currentTarget.setAttribute('aria-expanded', String(expanded));
+});
+$$('[data-collection]').forEach(button => button.addEventListener('change', () => { if (button.checked) setCollection(button.dataset.collection); }));
+$('#search').addEventListener('input', (event) => { ui.search = event.target.value.trim(); if (data) resetView(); });
+$('#source').addEventListener('change', (event) => { ui.source = event.target.value; resetView(); });
+$$('[data-platform]').forEach(input => input.addEventListener('change', () => {
+  const selected = new Set(ui.platforms);
+  if (input.checked) selected.add(input.dataset.platform);
+  else selected.delete(input.dataset.platform);
+  setPlatforms(selected);
+}));
+$('#platform-all-on').addEventListener('click', () => setPlatforms(PLATFORMS));
+$('#platform-all-off').addEventListener('click', () => setPlatforms([]));
+$('#page-size').addEventListener('change', (event) => { ui.pageSize = Number(event.target.value); resetView(); });
+$$('.status-tab').forEach((button) => button.addEventListener('click', () => { ui.status = button.dataset.status; resetView(); }));
+$('#select-all').addEventListener('change', (event) => {
+  visibleArticles().filter((a) => !isRemoved(a)).forEach((article) => { if (event.target.checked) ui.selected.add(article.id); else ui.selected.delete(article.id); });
+  render();
+});
+$$('[data-batch]').forEach((button) => button.addEventListener('click', () => saveDecision([...ui.selected], button.dataset.batch)));
+$$('[data-detail]').forEach((button) => button.addEventListener('click', () => saveDecision([ui.detailId], button.dataset.detail)));
+$('#previous-page').addEventListener('click', () => { ui.page -= 1; ui.selected.clear(); render(); });
+$('#next-page').addEventListener('click', () => { ui.page += 1; ui.selected.clear(); render(); });
+$('#undo').addEventListener('click', () => perform(() => request('/api/undo', { version: data.state.version }), 'Die letzte lokale Entscheidung wurde rückgängig gemacht. Bereits bestätigte Entfernungen in Inoreader werden nicht wiederhergestellt.'));
+$('#refresh').addEventListener('click', refreshInoreader);
+$('#open-selected').addEventListener('click', () => {
+  const urls = [...new Set(data.articles.filter((a) => ui.selected.has(a.id)).map((a) => safeUrl(a.url)).filter(Boolean))];
+  let opened = 0;
+  for (const url of urls) {
+    const tab = window.open('about:blank', '_blank');
+    if (!tab) break;
+    tab.opener = null;
+    tab.location.replace(url);
+    opened += 1;
+  }
+  notice(opened === urls.length ? `${opened} Originale in neuen Tabs geöffnet.` : `${opened} von ${urls.length} Originalen geöffnet. Der Pop-up-Schutz blockiert die weiteren Tabs. In Firefox: oben im Pop-up-Hinweis „Preferences“ / „Einstellungen“ wählen und Pop-ups für 127.0.0.1 erlauben. Alternativ die übrigen Originale hier einzeln öffnen:`);
+  for (const url of urls.slice(opened)) {
+    const link = node('a', 'blocked-original', url);
+    link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+    $('#notice').append(link);
+  }
+});
+$('#connect').addEventListener('click', connect);
+$('#x-connect').addEventListener('click', async () => {
+  if (ui.busy) return;
+  if (!$('#x-user-cost-approval').checked) { notice('Der Identitätsabruf kostet bis zu 0,01 USD. Bitte ausdrücklich freigeben.', true); return; }
+  ui.busy = true; render();
+  try {
+    const result = await request('/api/x/connect', { clientId: $('#x-client-id').value, users: 1, posts: 0, mutations: 0, verification_posts: 0, usd: 0.01 });
+    const url = safeUrl(result.url);
+    if (!url || new URL(url).hostname !== 'x.com') throw new Error('Die X-Anmeldeadresse ist ungültig.');
+    window.location.assign(url);
+  } catch (error) { notice(error.message, true); }
+  finally { ui.busy = false; render(); }
+});
+$('#x-import').addEventListener('click', openXImport);
+$('#x-check').addEventListener('click', showXCheck);
+for(const id of ['x-check-posts','x-check-pages']) $(`#${id}`).addEventListener('input',updateXCheckQuote);
+$('#x-check-approval').addEventListener('change',()=>{try{xCheckBudget();$('#confirm-x-check').disabled=ui.busy||!$('#x-check-approval').checked;}catch{$('#confirm-x-check').disabled=true;}});
+$('#confirm-x-check').addEventListener('click',runXCheck);
+for(const id of ['close-x-check','cancel-x-check']) $(`#${id}`).addEventListener('click',()=>{if(!ui.busy)$('#x-check-dialog').close();});
+for(const id of ['sync-x-posts','sync-x-pages']) $(`#${id}`).addEventListener('input',updateSyncQuote);
+$('#sync-x-approval').addEventListener('change', () => {
+  try { removalBudget(); updateSyncAvailability(); }
+  catch { $('#confirm-sync').disabled = true; }
+});
+$('#confirm-x-import').addEventListener('click', confirmXImport);
+for (const id of ['x-import-posts', 'x-import-users', 'x-import-pages', 'x-import-usd', 'x-import-restart']) $(`#${id}`).addEventListener('input', updateXImportQuote);
+$('#x-import-approval').addEventListener('change', () => {
+  try { xImportParameters(); $('#confirm-x-import').disabled = ui.busy || !$('#x-import-approval').checked; }
+  catch { $('#confirm-x-import').disabled = true; }
+});
+for (const id of ['close-x-import','cancel-x-import']) $(`#${id}`).addEventListener('click', () => { if (!ui.busy) $('#x-import-dialog').close(); });
+$('#x-import-dialog').addEventListener('cancel', (event) => { if (ui.busy) event.preventDefault(); });
+$('#x-disconnect').addEventListener('click', () => perform(() => request('/api/x/disconnect', {}), 'X-Verbindung getrennt.'));
+$('#karakeep-selected').addEventListener('click', saveSelectedToKarakeep);
+$('#detail-karakeep').addEventListener('click', () => saveToKarakeep(ui.detailId));
+$('#detail-fetch-x').addEventListener('click', fetchXContent);
+$('#confirm-karakeep').addEventListener('click', connectKarakeep);
+$('#karakeep-key').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); connectKarakeep(); } });
+$('#close-karakeep').addEventListener('click', () => $('#karakeep-dialog').close());
+$('#karakeep-dialog').addEventListener('cancel', (event) => { if (ui.busy) event.preventDefault(); });
+$('#karakeep-dialog').addEventListener('close', () => { $('#karakeep-key').value = ''; restoreFocus(karakeepOpener); karakeepOpener = null; });
+$('#preview').addEventListener('click', showPreview);
+$('#close-detail').addEventListener('click', () => $('#detail-dialog').close());
+$('#detail-dialog').addEventListener('close', () => { ui.detailId = null; restoreFocus(detailOpener); detailOpener = null; });
+for (const id of ['close-sync', 'cancel-sync']) $(`#${id}`).addEventListener('click', () => $('#sync-dialog').close());
+$('#sync-dialog').addEventListener('cancel', (event) => { if (ui.busy) event.preventDefault(); });
+$('#x-check-dialog').addEventListener('cancel',(event)=>{if(ui.busy)event.preventDefault();});
+$('#confirm-sync').addEventListener('click', sync);
+
+$('#select-all').disabled = true;
+request('/api/state').then(applyState).catch((error) => {
+  $('#saved-status').textContent = 'Stand nicht geladen';
+  notice(error.message, true);
+  const empty = node('div', 'empty-state');
+  empty.append(node('h3', '', 'Die Sammlung konnte nicht geladen werden.'), node('p', '', 'Starte die lokale Anwendung und lade diese Seite erneut.'));
+  $('#article-list').replaceChildren(empty);
+});
+
+// Appearance preference: local browser setting only.
+(() => {
+      const key = 'leseliste-theme';
+      const modes = ['light', 'dark', 'system'];
+      const system = window.matchMedia('(prefers-color-scheme: dark)');
+      let preference = 'system';
+      try {
+        const saved = localStorage.getItem(key);
+        if (modes.includes(saved)) preference = saved;
+      } catch { /* Theme selection also works without browser storage. */ }
+      function apply() {
+        const dark = preference === 'dark' || (preference === 'system' && system.matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.documentElement.dataset.themePreference = preference;
+        document.querySelectorAll('[data-theme-mode]').forEach(button => {
+          button.setAttribute('aria-pressed', String(button.dataset.themeMode === preference));
+        });
+      }
+      apply();
+      system.addEventListener('change', apply);
+      document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('[data-theme-mode]').forEach(button => {
+          button.addEventListener('click', () => {
+            preference = button.dataset.themeMode;
+            try { localStorage.setItem(key, preference); } catch { /* Keep session choice. */ }
+            apply();
+          });
+        });
+        apply();
+      });
+    })();

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+state.json
+state.json.*
+server.log
+oauth-client.json
+inoreader-imported.json
