@@ -394,6 +394,10 @@ function render() {
     button.classList.toggle('active', button.dataset.collection === ui.collection);
     button.setAttribute('aria-pressed', String(button.dataset.collection === ui.collection));
   });
+  $$('[data-platform]').forEach(button => {
+    button.classList.toggle('active', button.dataset.platform === ui.platform);
+    button.setAttribute('aria-pressed', String(button.dataset.platform === ui.platform));
+  });
   const collectionCount = $('#collection-all-count');
   if (collectionCount) collectionCount.textContent = data.articles.length;
   const xCount = $('#collection-x-count');
@@ -727,7 +731,7 @@ $('#all-topics').addEventListener('click', () => { ui.topic = ''; resetView(); }
 $$('[data-collection]').forEach(button => button.addEventListener('click', () => setCollection(button.dataset.collection)));
 $('#search').addEventListener('input', (event) => { ui.search = event.target.value.trim(); if (data) resetView(); });
 $('#source').addEventListener('change', (event) => { ui.source = event.target.value; resetView(); });
-$('#platform').addEventListener('change', (event) => setPlatform(event.target.value));
+$$('[data-platform]').forEach(button => button.addEventListener('click', () => setPlatform(button.dataset.platform)));
 $('#page-size').addEventListener('change', (event) => { ui.pageSize = Number(event.target.value); resetView(); });
 $$('.status-tab').forEach((button) => button.addEventListener('click', () => { ui.status = button.dataset.status; resetView(); }));
 $('#select-all').addEventListener('change', (event) => {

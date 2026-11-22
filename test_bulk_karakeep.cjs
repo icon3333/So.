@@ -171,6 +171,16 @@ test('platform classification is independent of bookmark origin and rejects look
   assert.deepEqual(h.value('scopedArticles().map(a=>a.id)'), ['video']);
 });
 
+test('platform buttons sit in the sidebar between origin and themes without a dropdown', () => {
+  const html = fs.readFileSync(`${__dirname}/index.html`, 'utf8');
+  const sidebar = html.slice(html.indexOf('<aside'), html.indexOf('</aside>'));
+  assert.deepEqual([...sidebar.matchAll(/data-platform="([^"]*)"/g)].map(match => match[1]), ['', 'youtube', 'x', 'substack', 'web']);
+  assert.ok(sidebar.indexOf('collection-switch') < sidebar.indexOf('platform-switch'));
+  assert.ok(sidebar.indexOf('platform-switch') < sidebar.indexOf('THEMENFILTER'));
+  assert.match(sidebar, /role="group" aria-labelledby="platform-label"/);
+  assert.doesNotMatch(html, /<select[^>]*id="platform"/);
+});
+
 test('platform changes clear stale selection without changing removal origin', () => {
   const h = harness();
   fakeDom(h);
