@@ -79,7 +79,29 @@ class App:
                 'savedIds': [a['id'] for a in self.articles if self.store.is_saved(a['id'])],
                 'xImport': self.x_bookmarks.status() if getattr(self, 'x_bookmarks', None) else None,
                 'total': len(self.articles), 'fetchedAt': self.snapshot['fetchedAt'], 'state': self.store.view(),
-                'connection': self.connection.status(), 'xConnection': x_status, 'karakeep': self.karakeep.status()}
+                'connection': self.connection.status(), 'xConnection': x_status, 'karakeep': self.karakeep.status(),
+                'sourceInventory': self._source_inventory()}
+
+    def _source_inventory(self):
+        return {source: self.store.source_inventory(source) for source in ('x', 'inoreader')}
+
+    def check_source_inventory(self, source):
+        """Explicit source check; never called as a side effect of GET payload."""
+        if source not in ('x', 'inoreader'):
+            raise StateError('Unknown source inventory.', 400)
+        with self.operation_lock:
+            try:
+                if source == 'inoreader':
+                    snapshot = self.connection.read_later_inventory()
+                else:
+                    snapshot = self.x_bookmarks.source_inventory()
+                    if snapshot.get('checkedAt') is None:
+                        raise StateError('X inventory requires an existing authorized bookmark scan.', 409)
+                self.store.record_source_inventory(source, snapshot['count'], snapshot['coverage'], snapshot['checkedAt'])
+            except (StateError, OSError):
+                self.store.fail_source_inventory(source)
+                raise
+            return self.payload()
 
     def refresh_catalog(self):
         """Publish an atomically persisted additive page to the active review store."""
@@ -549,6 +571,8 @@ class Handler(BaseHTTPRequestHandler):
                                                       body.get('maxResults', 100), body.get('restart', False)))
             elif path == '/api/refresh':
                 self.send(self.app.refresh())
+            elif path == '/api/source-inventory/check':
+                self.send(self.app.check_source_inventory(body.get('source')))
             elif path == '/api/x/check':
                 approval = {key: body.get(key, 0) for key in ('posts','users','mutations','verification_posts','pages','usd')}
                 self.send(self.app.check_x_membership(approval))

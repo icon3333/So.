@@ -95,4 +95,15 @@ class StateTests(unittest.TestCase):
         Store(self.path, self.articles)
         self.assertEqual(self.path.read_bytes(), before)
 
+    def test_source_inventory_persists_separately_and_derives_stale_on_failure(self):
+        self.s.record_source_inventory('x', 2, 'partial', 'check-1')
+        self.assertEqual(self.s.source_inventory('x'), {
+            'count': 2, 'checkedAt': 'check-1', 'coverage': 'partial', 'state': 'partial'})
+        self.s.fail_source_inventory('x')
+        self.assertEqual(self.s.source_inventory('x'), {
+            'count': 2, 'checkedAt': 'check-1', 'coverage': 'partial', 'state': 'stale'})
+        reopened = Store(self.path, self.articles)
+        self.assertEqual(reopened.source_inventory('x')['count'], 2)
+        self.assertIsNone(reopened.source_inventory('inoreader')['count'])
+
 if __name__ == '__main__': unittest.main()

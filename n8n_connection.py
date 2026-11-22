@@ -158,3 +158,13 @@ class Connection:
             if result.get('complete') is not True or not isinstance(result.get('starredIds'), list) or not isinstance(result.get('checkedAt'), str):
                 raise StateError('Inoreader hat keinen vollständigen überprüfbaren Stand geliefert.', 502)
             return result
+
+    def read_later_inventory(self):
+        """Count the complete current starred-ID set returned by the verified workflow."""
+        result = self.call('read')
+        if result.get('complete') is not True or not isinstance(result.get('starredIds'), list) or not isinstance(result.get('checkedAt'), str):
+            raise StateError('Inoreader hat keinen vollständigen überprüfbaren Stand geliefert.', 502)
+        ids = result['starredIds']
+        if any(not isinstance(item, str) or not item for item in ids):
+            raise StateError('Inoreader lieferte ungültige Lesezeichen-IDs.', 502)
+        return {'count': len(set(ids)), 'coverage': 'complete', 'checkedAt': result['checkedAt']}

@@ -39,7 +39,7 @@ class Store:
         self.lock = threading.RLock()
         self.x_account_id = x_account_id
         self.data = {'version': 0, 'decisions': {}, 'history': [], 'karakeepSaved': {},
-                     'remote': {'checkedAt': None, 'starredIds': None}}
+                     'remote': {'checkedAt': None, 'starredIds': None}, 'sourceInventory': {}}
         if self.path.exists():
             try:
                 saved = json.loads(self.path.read_text())
@@ -47,6 +47,14 @@ class Store:
                 assert isinstance(saved['decisions'], dict)
                 assert isinstance(saved['history'], list)
                 assert isinstance(saved['remote'], dict)
+                inventory = saved.get('sourceInventory', {})
+                assert isinstance(inventory, dict)
+                for source, record in inventory.items():
+                    assert source in ('x', 'inoreader') and isinstance(record, dict)
+                    assert record.get('count') is None or (type(record.get('count')) is int and record['count'] >= 0)
+                    assert record.get('checkedAt') is None or isinstance(record.get('checkedAt'), str)
+                    assert record.get('coverage') in ('unknown', 'partial', 'complete')
+                    assert type(record.get('failed')) is bool
                 x_remote = saved.get('xRemote', {})
                 assert isinstance(x_remote, dict)
                 assert x_remote.get('accountId') is None or isinstance(x_remote.get('accountId'), str)
@@ -164,6 +172,33 @@ class Store:
         pending = {a['id'] for a in self.preview()['items']}
         if not set(ids).issubset(pending):
             raise StateError('Die Auswahl stimmt nicht mehr mit den vorgemerkten Änderungen überein.', 409)
+
+    def source_inventory(self, source):
+        if source not in ('x', 'inoreader'):
+            raise StateError('Unknown source inventory.')
+        with self.lock:
+            item = self.data.get('sourceInventory', {}).get(source, {})
+            if not item:
+                return {'count': None, 'checkedAt': None, 'coverage': 'unknown', 'state': 'unknown'}
+            count, checked_at, coverage = item.get('count'), item.get('checkedAt'), item.get('coverage', 'unknown')
+            state = 'stale' if item.get('failed') and checked_at is not None else ('unknown' if checked_at is None else coverage)
+            return {'count': count, 'checkedAt': checked_at, 'coverage': coverage if checked_at else 'unknown', 'state': state}
+
+    def record_source_inventory(self, source, count, coverage, checked_at):
+        if source not in ('x', 'inoreader') or type(count) is not int or count < 0 or coverage not in ('partial', 'complete') or not isinstance(checked_at, str):
+            raise StateError('Invalid source inventory snapshot.')
+        with self.lock:
+            candidate = self.view()
+            candidate.setdefault('sourceInventory', {})[source] = {'count': count, 'checkedAt': checked_at, 'coverage': coverage, 'failed': False}
+            self.save(candidate)
+
+    def fail_source_inventory(self, source):
+        if source not in ('x', 'inoreader'):
+            raise StateError('Unknown source inventory.')
+        with self.lock:
+            candidate = self.view()
+            candidate.setdefault('sourceInventory', {}).setdefault(source, {'count': None, 'checkedAt': None, 'coverage': 'unknown', 'failed': False})['failed'] = True
+            self.save(candidate)
 
     def apply_remote(self, starred_ids, checked_at):
         with self.lock:

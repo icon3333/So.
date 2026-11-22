@@ -5,7 +5,7 @@ import re
 import threading
 from pathlib import Path
 
-from triage_state import atomic_json
+from triage_state import atomic_json, now
 
 
 # API refreshes may update source fields, but must not erase local Hermes enrichment.
@@ -71,6 +71,14 @@ class XBookmarkCatalog:
             return {**{k: copy.deepcopy(v) for k, v in self.data.items() if k not in ('entries', 'inventorySeen', 'cursorHistory')},
                     'count': len(self.data['entries']), 'inventorySeenCount': len(self.data['inventorySeen'])}
 
+    def source_inventory(self):
+        """Report proven scan coverage, never catalog size as remote inventory."""
+        with self.lock:
+            count = len(set(self.data['inventorySeen']))
+            complete = self.data['complete'] and not self.data['partial'] and self.data['checkpoint'] is None
+            return {'count': count, 'coverage': 'complete' if complete else 'partial',
+                    'checkedAt': self.data.get('inventoryCheckedAt')}
+
     def begin_inventory(self, account_id, restart=False):
         with self.lock:
             if self.data['accountId'] not in (None, account_id):
@@ -129,6 +137,7 @@ class XBookmarkCatalog:
             candidate['checkpoint'] = next_cursor
             candidate['inventorySeen'] = list(dict.fromkeys(candidate['inventorySeen'] + seen_ids))
             candidate['complete'] = complete
+            candidate['inventoryCheckedAt'] = now()
             candidate['scanStarted'] = not complete
             candidate['partial'] = not complete
             candidate['restartRequired'] = False if complete else restart_required

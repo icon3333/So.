@@ -83,6 +83,21 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(saved['entries']['a']['status'], 'partial')
         self.assertEqual(saved['entries']['a']['text'], 'raw')
 
+    def test_payload_source_inventory_is_independent_from_local_catalog_and_triage(self):
+        self.app.store.record_source_inventory('x', 2, 'partial', 'x-check')
+        self.app.x_bookmarks = Mock()
+        self.app.x_bookmarks.status.return_value = {'count': 3, 'inventorySeenCount': 2}
+        self.app.x_bookmarks.source_inventory.return_value = {'count': 2, 'coverage': 'partial', 'checkedAt': None}
+        self.app.x_content_path = None
+        self.app.x_content = {'entries': {}}
+        self.app.snapshot = {'fetchedAt': 'snapshot'}
+        payload = self.app.payload()
+        self.assertIsNone(payload['sourceInventory']['inoreader']['count'])
+        self.assertEqual(payload['sourceInventory']['x']['state'], 'partial')
+        self.assertEqual(payload['xImport']['count'], 3)
+        self.assertEqual(payload['sourceInventory']['inoreader']['state'], 'unknown')
+        self.assertEqual(set(self.app.store.view()['decisions']), {'a', 'b'})
+
     def test_fetch_x_keeps_successful_enrichment_without_refetch(self):
         self.app.eligible_ids = {'a'}
         self.app.x_content_path = Path(self.temp.name) / 'x-content.json'

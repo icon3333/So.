@@ -78,6 +78,27 @@ class XBookmarkCatalogTests(unittest.TestCase):
         self.assertEqual(catalog.path.read_bytes(), old_bytes)
         self.assertEqual(catalog.data['checkpoint'], 'old-cursor')
 
+    def test_partial_inventory_has_its_own_check_time_after_restart(self):
+        catalog = XBookmarkCatalog(self.root / 'x-bookmarks.json')
+        with patch('x_bookmarks.now', return_value='first-check'):
+            catalog.merge_page('acct-1', [], None, complete=True, seen_ids=['1', '2'])
+        with patch('x_bookmarks.now', return_value='second-check'):
+            catalog.merge_page('acct-1', [], 'next', seen_ids=['3'], begin=True)
+        self.assertEqual(catalog.source_inventory(), {
+            'count': 1, 'coverage': 'partial', 'checkedAt': 'second-check'})
+
+    def test_source_inventory_uses_seen_ids_not_catalog_size_and_only_complete_scan_is_complete(self):
+        catalog = XBookmarkCatalog(self.root / 'x-bookmarks.json')
+        catalog.merge_page('acct-1', [{'postId': '99'}], 'cursor', seen_ids=['1'])
+        partial = catalog.source_inventory()
+        self.assertEqual(partial['count'], 1)
+        self.assertEqual(partial['coverage'], 'partial')
+        catalog.merge_page('acct-1', [{'postId': '2'}], None, complete=True, begin=True, seen_ids=['2'])
+        complete = catalog.source_inventory()
+        self.assertEqual(complete['count'], 1)
+        self.assertEqual(complete['coverage'], 'complete')
+        self.assertTrue(complete['checkedAt'])
+
     def test_different_account_cannot_replace_existing_catalog(self):
         catalog = XBookmarkCatalog(self.root / 'x-bookmarks.json')
         catalog.merge_page('acct-1', [{'postId': '7', 'summary': 'Verified summary'}], 'c1')

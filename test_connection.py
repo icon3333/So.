@@ -50,6 +50,17 @@ class CallbackTests(unittest.TestCase):
         self.assertEqual(body['code_verifier'], 'synthetic-verifier')
         self.assertEqual(body['redirect_uri'], 'http://127.0.0.1:8769/oauth/callback')
 
+    def test_read_later_inventory_counts_unique_ids_from_verified_complete_read(self):
+        conn = Connection.__new__(Connection)
+        conn.call = lambda operation, ids=None: {'complete': True, 'starredIds': ['a', 'b', 'a'], 'checkedAt': '2026-11-18T10:00:00Z'}
+        self.assertEqual(conn.read_later_inventory(), {'count': 2, 'coverage': 'complete', 'checkedAt': '2026-11-18T10:00:00Z'})
+
+    def test_read_later_inventory_rejects_incomplete_membership(self):
+        conn = Connection.__new__(Connection)
+        conn.call = lambda operation, ids=None: {'complete': False, 'starredIds': ['a'], 'checkedAt': '2026-11-18T10:00:00Z'}
+        with self.assertRaises(StateError):
+            conn.read_later_inventory()
+
 
 if __name__ == '__main__':
     unittest.main()
