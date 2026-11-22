@@ -16,3 +16,26 @@ x-bookmarks.json
 .env.*
 *.pem
 *.key
+
+# Local integrations, OAuth material and private inventory exports
+.envrc
+.secrets/
+credentials/
+secrets/
+*.p12
+*.pfx
+*.jwk
+*credentials*.json
+*token*.json
+*oauth*.json
+inoreader-imported.json
+sync-workflow.ts
+sync-workflow.json
+*.sqlite*
+*.db
+*.log
+.DS_Store
+.venv/
+node_modules/
+backups/
+Takeout/
