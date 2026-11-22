@@ -4,6 +4,7 @@ import html
 import json
 import re
 import secrets
+import os
 import threading
 import urllib.error
 import urllib.parse
@@ -47,10 +48,12 @@ def load_articles(root):
 
 
 class App:
-    def __init__(self, root, origin, state_path=None):
-        self.root, self.origin = root, origin
-        self.snapshot, self.articles = load_articles(root)
-        self.x_bookmarks = XBookmarkCatalog(root / 'x-bookmarks.json')
+    def __init__(self, root, origin, state_path=None, data_root=None):
+        self.root, self.origin = Path(root).resolve(), origin
+        # Legacy/test callers that omit data_root retain their historical co-located layout.
+        self.data_root = Path(data_root).resolve() if data_root is not None else self.root
+        self.snapshot, self.articles = load_articles(self.data_root)
+        self.x_bookmarks = XBookmarkCatalog(self.data_root / 'x-bookmarks.json')
         self.x_connection = XConnection(origin, self.x_bookmarks)
         self.articles.extend(self.x_bookmarks.articles())
         for article in self.articles:
@@ -58,11 +61,11 @@ class App:
             article.setdefault('originAccountId', None)
         self.eligible_ids = {a['id'] for a in self.articles}
         self.x_ids = {a['id'] for a in self.articles if a['origin'] == 'inoreader' and is_x_article(a)}
-        self.store = Store(state_path or root / 'state.json', self.articles, eligible_ids=self.eligible_ids,
+        self.store = Store(state_path or self.data_root / 'state.json', self.articles, eligible_ids=self.eligible_ids,
                            x_account_id=self.x_bookmarks.data['accountId'])
-        self.x_content_path = root / 'x-content.json'
+        self.x_content_path = self.data_root / 'x-content.json'
         self.x_content = load_x_content(self.x_content_path)
-        self.connection = Connection(root, origin)
+        self.connection = Connection(self.data_root, origin)
         self.karakeep = KarakeepConnection()
         self.operation_lock = threading.RLock()
         self.removal_confirmations = {}
@@ -540,7 +543,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/sync/preview':
                 self.send(self.app.preview_removals())
 
-            elif path in ('/', '/index.html', '/app.js', '/styles.css', '/cockpit', '/cockpit.js', '/cockpit.css'):
+            elif path in ('/', '/index.html', '/app.js', '/styles.css', '/cockpit', '/cockpit.html', '/cockpit.js', '/cockpit.css'):
                 filename = {'/': 'index.html', '/cockpit': 'cockpit.html'}.get(path, path[1:])
                 types = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8'}
                 self.send((self.app.root / filename).read_bytes(), content_type=types[Path(filename).suffix])
@@ -621,8 +624,14 @@ def main():
     parser.add_argument('--state', type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
+    configured = os.environ.get('SO_DATA_DIR')
+    if not configured:
+        parser.error('SO_DATA_DIR must name an existing private absolute data directory')
+    data_root = Path(configured)
+    if not data_root.is_absolute() or not data_root.is_dir() or data_root.resolve() == root:
+        parser.error('SO_DATA_DIR must be an existing directory separate from the code root')
     origin = 'http://127.0.0.1:%s' % args.port
-    app = App(root, origin, args.state)
+    app = App(root, origin, args.state, data_root=data_root)
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     server.app = app
     print('Lesestapel öffnen: ' + origin, flush=True)

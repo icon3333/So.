@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -7,6 +10,9 @@ from unittest.mock import Mock, patch
 
 from server import App
 from triage_state import StateError, Store
+from http.server import ThreadingHTTPServer
+from threading import Thread
+from server import Handler
 
 
 class SyncTests(unittest.TestCase):
@@ -28,6 +34,64 @@ class SyncTests(unittest.TestCase):
 
     def remote(self, ids):
         return {'starredIds': ids, 'checkedAt': 'now'}
+
+    def test_production_data_root_separates_all_runtime_files_and_archive_is_private(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, data, archive = (Path(tmp) / x for x in ('code', 'prod_data', 'archive_data'))
+            for folder in (code, data, archive): folder.mkdir()
+            (code / 'index.html').write_text('synthetic-code')
+            (data / 'articles.json').write_text(json.dumps({'fetchedAt':'synthetic', 'articles':[
+                {'id':'prod','title':'PROD_SENTINEL','ref':'p','url':'https://example.test'}], 'sameUrlGroups':[]}))
+            (archive / 'articles.json').write_text(json.dumps({'fetchedAt':'archive', 'articles':[
+                {'id':'archive','title':'ARCHIVE_SENTINEL','ref':'a','url':'https://example.test'}], 'sameUrlGroups':[]}))
+            app = App(code, 'http://127.0.0.1:8769', data_root=data)
+            self.assertEqual([a['id'] for a in app.articles], ['prod'])
+            self.assertEqual(app.store.path, data / 'state.json')
+            self.assertEqual(app.x_bookmarks.path, data / 'x-bookmarks.json')
+            self.assertEqual(app.x_content_path, data / 'x-content.json')
+            self.assertEqual(app.connection.root, data)
+            httpd = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            httpd.app = app
+            thread = Thread(target=httpd.serve_forever, daemon=True); thread.start()
+            self.addCleanup(httpd.server_close); self.addCleanup(httpd.shutdown)
+            import urllib.request
+            base = 'http://127.0.0.1:%d' % httpd.server_port
+            origin = 'http://127.0.0.1:8769'
+            app.origin = origin
+            def request(path):
+                req = urllib.request.Request(base + path, headers={'Host': '127.0.0.1:8769'})
+                return urllib.request.urlopen(req)
+            state = request('/api/state').read().decode()
+            self.assertIn('PROD_SENTINEL', state)
+            self.assertNotIn('ARCHIVE_SENTINEL', state)
+            for url in ('/articles.json', '/state.json', '/archive_data/articles.json'):
+                with self.assertRaises(Exception): request(url)
+            self.assertEqual(request('/').read(), b'synthetic-code')
+            app.store.decide(0, ['prod'], 'keep')
+            self.assertTrue((data / 'state.json').is_file())
+            self.assertEqual(list(code.iterdir()), [code / 'index.html'])
+            self.assertEqual(list(archive.iterdir()), [archive / 'articles.json'])
+
+    def test_production_launcher_rejects_missing_bad_or_checkout_data_directory(self):
+        script = Path(__file__).with_name('server.py')
+        env = dict(os.environ); env.pop('SO_DATA_DIR', None)
+        missing = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn('SO_DATA_DIR', missing.stderr)
+        env['SO_DATA_DIR'] = '.'
+        checkout = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True)
+        self.assertNotEqual(checkout.returncode, 0)
+        self.assertIn('SO_DATA_DIR', checkout.stderr)
+        env['SO_DATA_DIR'] = 'relative-data'
+        relative = subprocess.run([sys.executable, str(script)], env=env, capture_output=True, text=True)
+        self.assertNotEqual(relative.returncode, 0)
+
+    def test_desktop_launcher_refuses_missing_or_relative_data_dir_before_existing_instance(self):
+        from unittest.mock import patch
+        import start
+        with patch.dict(os.environ, {'SO_DATA_DIR': 'relative-data'}), patch('start.running') as running:
+            with self.assertRaises(RuntimeError): start.main()
+            running.assert_not_called()
 
     def test_only_selected_still_saved_ids_are_written(self):
         self.app.connection.call.side_effect = [self.remote(['a', 'c']), self.remote(['c'])]
