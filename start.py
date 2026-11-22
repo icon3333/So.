@@ -1,5 +1,6 @@
 """Start the local app on demand, or open its already-running instance."""
 import json
+from data_dir import production_dir
 import subprocess
 import sys
 import time
@@ -22,6 +23,10 @@ def running():
 
 
 def main():
+    try:
+        production_dir(Path(__file__).resolve().parent)
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
     if running():
         webbrowser.open(ORIGIN)
         return
