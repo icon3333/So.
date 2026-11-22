@@ -1,5 +1,6 @@
 """Start the local app on demand, or open its already-running instance."""
 import json
+import os
 import subprocess
 import sys
 import time
@@ -22,6 +23,9 @@ def running():
 
 
 def main():
+    data_dir = os.environ.get('SO_DATA_DIR')
+    if not data_dir or not Path(data_dir).is_absolute() or not Path(data_dir).is_dir():
+        raise RuntimeError('SO_DATA_DIR must name an existing absolute data directory')
     if running():
         webbrowser.open(ORIGIN)
         return
