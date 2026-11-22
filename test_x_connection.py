@@ -117,6 +117,34 @@ class OAuthTests(unittest.TestCase):
 
 
 class BudgetTests(unittest.TestCase):
+    @patch('x_connection._safe_json_request')
+    def test_bookmarks_page_uses_current_schema_and_reserves_before_transport(self, request):
+        catalog = XBookmarkCatalog(Path(self.enterContext(tempfile.TemporaryDirectory())) / 'x.json')
+        connection = XConnection('http://127.0.0.1:8769', catalog)
+        connection.tokens = {'access_token': 'synthetic', 'expires_at': time.time() + 60, 'scopes': list(SCOPES)}
+        connection.account = {'id': '12345'}
+        budget = connection.new_operation({'posts': 2, 'users': 2, 'pages': 1, 'usd': .03})
+        request.return_value = {'data': []}
+        connection.bookmarks_page(budget, '12345', 'opaque-token', 2)
+        url = request.call_args.args[0]
+        from urllib.parse import parse_qs, urlsplit
+        params = parse_qs(urlsplit(url).query)
+        self.assertEqual(params['max_results'], ['2'])
+        self.assertEqual(params['post.fields'], ['id,text,created_at,article,note_post,attachments,entities'])
+        self.assertEqual(params['pagination_token'], ['opaque-token'])
+        self.assertNotIn('author_id', params['post.fields'][0])
+        self.assertEqual(budget.status()['reserved'], {'posts': 2, 'users': 2, 'mutations': 0, 'verification_posts': 0, 'pages': 1})
+
+    @patch('x_connection._safe_json_request')
+    def test_bookmarks_page_budget_default_blocks_transport(self, request):
+        catalog = XBookmarkCatalog(Path(self.enterContext(tempfile.TemporaryDirectory())) / 'x.json')
+        connection = XConnection('http://127.0.0.1:8769', catalog)
+        connection.tokens = {'access_token': 'synthetic', 'expires_at': time.time() + 60, 'scopes': list(SCOPES)}
+        connection.account = {'id': '12345'}
+        with self.assertRaises(StateError):
+            connection.bookmarks_page(connection.new_operation({'usd': 0}), '12345', max_results=1)
+        request.assert_not_called()
+
     def test_exact_decimal_boundary_and_immutable_operation_approval(self):
         budget = BudgetLedger({'posts': 3, 'pages': 3, 'usd': .015})
         for _ in range(3):

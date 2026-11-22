@@ -4,14 +4,15 @@ import html
 import json
 import re
 import threading
+import urllib.error
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from n8n_connection import Connection
 from karakeep_connection import KarakeepConnection
-from triage_state import Store, StateError
-from x_content import fetch as fetch_x_content, is_x_article, load as load_x_content, save as save_x_content
+from triage_state import Store, StateError, now
+from x_content import fetch as fetch_x_content, is_x_article, x_post_id, load as load_x_content, save as save_x_content
 from x_bookmarks import XBookmarkCatalog
 from x_connection import XConnection
 
@@ -61,9 +62,18 @@ class App:
         self.operation_lock = threading.Lock()
 
     def payload(self):
+        if getattr(self, 'x_content_path', None) and self.x_content_path.exists():
+            self.x_content = load_x_content(self.x_content_path)
+        content = dict(getattr(self, 'x_content', {'entries': {}})['entries'])
+        public_posts = {x_post_id(a.get('url')): content[a['id']] for a in self.articles
+                        if a.get('origin') != 'x' and a['id'] in content and x_post_id(a.get('url'))}
+        for article in self.articles:
+            if (article.get('origin') == 'x' and article.get('visibility') == 'public'
+                    and article['id'] not in content and article.get('postId') in public_posts):
+                content[article['id']] = public_posts[article['postId']]
         x_connection = getattr(self, 'x_connection', None)
         x_status = x_connection.status() if x_connection else {'ready': False, 'connected': False, 'account': None}
-        return {'articles': self.articles, 'eligibleIds': sorted(getattr(self, 'eligible_ids', {a['id'] for a in self.articles})), 'xContent': getattr(self, 'x_content', {'schemaVersion': 1, 'entries': {}}),
+        return {'articles': self.articles, 'eligibleIds': sorted(getattr(self, 'eligible_ids', {a['id'] for a in self.articles})), 'xContent': {'schemaVersion': 1, 'entries': content},
                 'savedIds': [a['id'] for a in self.articles if self.store.is_saved(a['id'])],
                 'xImport': self.x_bookmarks.status() if getattr(self, 'x_bookmarks', None) else None,
                 'total': len(self.articles), 'fetchedAt': self.snapshot['fetchedAt'], 'state': self.store.view(),
@@ -79,10 +89,163 @@ class App:
             self.store.eligible_ids = self.eligible_ids.copy()
             self.store.x_account_id = self.x_bookmarks.data['accountId']
 
+    @staticmethod
+    def _normalize_x_post(post, account_id, username, user_map):
+        post_id = post.get('id')
+        if not isinstance(post_id, str) or not re.fullmatch(r'[0-9]+', post_id):
+            return None
+        author_id = post.get('author_id')
+        user = user_map.get(author_id) if isinstance(author_id, str) else None
+        handle = user.get('username') if isinstance(user, dict) else None
+        verified_handle = handle if isinstance(handle, str) and re.fullmatch(r'[A-Za-z0-9_]{1,15}', handle) else None
+        link = 'https://x.com/%s/status/%s' % (verified_handle, post_id) if verified_handle else 'https://x.com/i/status/%s' % post_id
+        raw = post.get('text')
+        article = post.get('article')
+        note = post.get('note_post') or post.get('note_tweet')
+        if isinstance(note, dict):
+            raw = note.get('text') or raw
+        if isinstance(article, dict):
+            raw = article.get('text') or article.get('body') or raw
+        text = raw if isinstance(raw, str) else ''
+        protection = user.get('protected') if isinstance(user, dict) else None
+        visibility = 'public' if protection is False else ('protected' if protection is True else 'unknown')
+        return {'postId': post_id, 'ref': 'x-%s-%s' % (account_id, post_id), 'url': link,
+                'title': re.sub(r'\s+', ' ', text).strip()[:140] if text else 'X-Beitrag · Inhalt fehlt',
+                'excerpt': text[:1200], 'text': text, 'author': ('@' + verified_handle) if verified_handle else '',
+                'publisher': {'title': 'X', 'url': 'https://x.com'}, 'createdAt': post.get('created_at'),
+                'missingContent': not bool(text), 'contentStatus': 'partial' if text else 'unavailable',
+                'visibility': visibility, 'limitations': ['Thread- und Medieninhalte sind nicht vollständig verifiziert.',
+                'Lokale Hermes-Zusammenfassung fehlt.'],
+                'media': post.get('attachments', {}).get('media_keys', []) if isinstance(post.get('attachments'), dict) else []}
+
+    def import_x_bookmarks(self, approval, max_pages=10, max_results=100, restart=False):
+        if type(restart) is not bool:
+            raise StateError('Ein Neustart muss ausdrücklich bestätigt werden.', 400)
+        if type(max_pages) is not int or max_pages < 1 or max_pages > 1000:
+            raise StateError('Seitenobergrenze muss zwischen 1 und 1000 liegen.', 400)
+        if type(max_results) is not int or max_results < 1 or max_results > 100:
+            raise StateError('Seitengröße muss zwischen 1 und 100 Posts liegen.', 400)
+        with self.operation_lock:
+            ledger = self.x_connection.new_operation(approval)
+            with self.x_connection.lock:
+                account_id = self.x_connection.account['id']
+                identity = (account_id, id(self.x_connection.tokens), self.x_connection.tokens['access_token'])
+                username = self.x_connection.account.get('username', '')
+            try:
+                if self.store.x_account_id not in (None, account_id):
+                    raise StateError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.', 409)
+                inventory = self.x_bookmarks.begin_inventory(account_id, restart=restart)
+            except ValueError as exc:
+                raise StateError(str(exc), 409) from None
+            cursor, seen = inventory['checkpoint'], list(inventory['seen'])
+            cursors = set(self.x_bookmarks.data.get('cursorHistory', []) if inventory['started'] else [])
+            if cursor:
+                cursors.add(cursor)
+            pages = 0
+            begin = not inventory['started']
+            partial_reason = None
+            for _ in range(max_pages):
+                with self.x_connection.lock:
+                    if (not self.x_connection.tokens or (self.x_connection.account or {}).get('id') != identity[0]
+                            or id(self.x_connection.tokens) != identity[1]
+                            or self.x_connection.tokens.get('access_token') != identity[2]):
+                        raise StateError('X-Konto oder Sitzung wurde während des Imports geändert.', 409)
+                with ledger.lock:
+                    remaining = {k: ledger.approval[k] - ledger.reserved[k] for k in ledger.COUNTS}
+                    include_author = ledger.approval['users'] > 0
+                    rate = ledger.RATES['posts'] + (ledger.RATES['users'] if include_author else 0)
+                    affordable = int((ledger.approval['usd'] - ledger.spent_ceiling) / rate)
+                    page_size = min(max_results, remaining['posts'], affordable,
+                                    remaining['users'] if include_author else max_results)
+                if page_size < 1 or remaining['pages'] < 1:
+                    if pages == 0:
+                        raise StateError('Die Kostenfreigabe reicht nicht für eine weitere Importseite.', 403)
+                    partial_reason = 'budget_exhausted'
+                    break
+                try:
+                    response = self.x_connection.bookmarks_page(ledger, account_id, cursor, page_size,
+                                                                include_author=include_author)
+                except StateError as exc:
+                    if pages == 0:
+                        raise
+                    partial_reason = 'api_stopped_%s' % exc.status
+                    break
+                pages += 1
+                with self.x_connection.lock:
+                    if (not self.x_connection.tokens or id(self.x_connection.tokens) != identity[1]
+                            or (self.x_connection.account or {}).get('id') != account_id
+                            or self.x_connection.tokens.get('access_token') != identity[2]):
+                        partial_reason = 'session_changed'
+                        break
+                if not isinstance(response, dict):
+                    response = {}
+                errors = response.get('errors')
+                meta = response.get('meta') if isinstance(response.get('meta'), dict) else {}
+                data = response.get('data')
+                if data is None and meta.get('result_count') == 0:
+                    data = []
+                if not isinstance(data, list):
+                    data = []
+                    errors = errors or [{'title': 'Invalid response'}]
+                includes = response.get('includes') if isinstance(response.get('includes'), dict) else {}
+                users = includes.get('users') if isinstance(includes.get('users'), list) else []
+                if len(data) > page_size or len(users) > (page_size if include_author else 0):
+                    raise StateError('X lieferte mehr Ressourcen als angefordert. Keine weitere Anfrage wurde gesendet.', 502)
+                user_map = {u.get('id'): u for u in users if isinstance(u, dict) and isinstance(u.get('id'), str)}
+                normalized, ids = [], []
+                for post in data:
+                    item = self._normalize_x_post(post, account_id, username, user_map) if isinstance(post, dict) else None
+                    if item:
+                        normalized.append(item)
+                        ids.append(item['postId'])
+                malformed = (not isinstance(response.get('meta'), dict) or len(normalized) != len(data)
+                             or len(set(ids)) != len(ids)
+                             or ('result_count' in meta and
+                                 (type(meta['result_count']) is not int or meta['result_count'] != len(data))))
+                if errors or malformed:
+                    details = errors if isinstance(errors, list) else []
+                    title = ' '.join(str(e.get('title', '')) + ' ' + str(e.get('detail', ''))
+                                     for e in details if isinstance(e, dict)).lower()
+                    invalid = 'pagination' in title and ('invalid' in title or 'token' in title)
+                    self.x_bookmarks.merge_page(account_id, normalized, cursor, seen_ids=ids, partial=True,
+                                                restart_required=invalid, begin=begin,
+                                                cursor_history=sorted(cursors))
+                    begin = False
+                    partial_reason = 'invalid_cursor' if invalid else ('api_errors' if errors else 'invalid_response')
+                    break
+                token = meta.get('next_token')
+                if token is not None and (not isinstance(token, str) or not token or len(token) > 4096 or token in cursors):
+                    self.x_bookmarks.merge_page(account_id, normalized, cursor, seen_ids=ids, partial=True,
+                                                restart_required=True, begin=begin, cursor_history=sorted(cursors))
+                    begin = False
+                    partial_reason = 'repeated_or_invalid_cursor'
+                    break
+                complete = token is None
+                merged_seen = list(dict.fromkeys(seen + ids))
+                self.x_bookmarks.merge_page(account_id, normalized, token, complete=complete,
+                                            seen_ids=ids, begin=begin,
+                                            cursor_history=sorted(cursors | ({cursor} if cursor else set())))
+                begin = False
+                seen = merged_seen
+                cursor = token
+                self.refresh_catalog()
+                if complete:
+                    self.store.apply_x_remote(account_id, seen, now())
+                    break
+                cursors.add(token)
+            self.refresh_catalog()
+            out = self.payload()
+            out['xImport'] = {**out['xImport'], 'pagesThisRun': pages, 'budget': ledger.status(),
+                              'partialReason': partial_reason}
+            return out
+
     def fetch_x(self, article_id):
         with self.operation_lock:
-            if not isinstance(article_id, str) or article_id not in getattr(self, 'x_ids', self.eligible_ids):
+            if (not isinstance(article_id, str) or article_id not in getattr(self, 'x_ids', self.eligible_ids)
+                    or article_id.startswith('x:')):
                 raise StateError('Nur X-Artikel können abgerufen werden.')
+            if getattr(self, 'x_content_path', None) and self.x_content_path.exists():
+                self.x_content = load_x_content(self.x_content_path)
             old = self.x_content['entries'].get(article_id)
             if old and old.get('status') in ('read', 'partial'):
                 return self.payload()
@@ -261,6 +424,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/x/disconnect':
                 self.app.x_connection.disconnect()
                 self.send(self.app.payload())
+            elif path == '/api/x/import':
+                approval = {key: body.get(key, 0) for key in ('posts', 'users', 'mutations', 'verification_posts', 'pages', 'usd')}
+                self.send(self.app.import_x_bookmarks(approval, body.get('maxPages', 10),
+                                                      body.get('maxResults', 100), body.get('restart', False)))
             elif path == '/api/refresh':
                 self.send(self.app.refresh())
             elif path == '/api/sync':

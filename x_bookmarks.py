@@ -17,6 +17,9 @@ class XBookmarkCatalog:
         self.data = {
             'schemaVersion': 1, 'accountId': None, 'revision': 0,
             'checkpoint': None, 'complete': False, 'entries': {},
+            'inventorySeen': [], 'scanStarted': False, 'partial': False,
+            'restartRequired': False,
+            'cursorHistory': [],
         }
         if self.path.exists():
             try:
@@ -31,6 +34,14 @@ class XBookmarkCatalog:
                 assert not saved['entries'] or saved['accountId']
                 assert all(k == self.native_id(saved['accountId'], v.get('postId'))
                            for k, v in saved['entries'].items())
+                saved.setdefault('inventorySeen', [])
+                saved.setdefault('scanStarted', False)
+                saved.setdefault('partial', False)
+                saved.setdefault('restartRequired', False)
+                saved.setdefault('cursorHistory', [])
+                assert isinstance(saved['cursorHistory'], list) and all(isinstance(v, str) for v in saved['cursorHistory'])
+                assert isinstance(saved['inventorySeen'], list) and all(isinstance(v, str) for v in saved['inventorySeen'])
+                assert all(type(saved[k]) is bool for k in ('scanStarted', 'partial', 'restartRequired'))
                 self.data = saved
             except (ValueError, KeyError, AssertionError, TypeError):
                 raise ValueError('The X bookmark catalog is damaged; it was not overwritten.') from None
@@ -53,10 +64,21 @@ class XBookmarkCatalog:
 
     def status(self):
         with self.lock:
-            return {**{k: copy.deepcopy(v) for k, v in self.data.items() if k != 'entries'},
-                    'count': len(self.data['entries'])}
+            return {**{k: copy.deepcopy(v) for k, v in self.data.items() if k not in ('entries', 'inventorySeen', 'cursorHistory')},
+                    'count': len(self.data['entries']), 'inventorySeenCount': len(self.data['inventorySeen'])}
 
-    def merge_page(self, account_id, entries, next_cursor, complete=False):
+    def begin_inventory(self, account_id, restart=False):
+        with self.lock:
+            if self.data['accountId'] not in (None, account_id):
+                raise ValueError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.')
+            if self.data['restartRequired'] and not restart:
+                raise ValueError('Die X-Inventur benötigt einen ausdrücklich freigegebenen Neustart.')
+            if restart or self.data['complete'] or not self.data['scanStarted']:
+                return {'checkpoint': None, 'seen': [], 'started': False}
+            return {'checkpoint': self.data['checkpoint'], 'seen': list(self.data['inventorySeen']), 'started': True}
+
+    def merge_page(self, account_id, entries, next_cursor, complete=False, seen_ids=None,
+                   partial=False, restart_required=False, begin=False, cursor_history=None):
         """Atomically persist a page and its next cursor before another page starts."""
         if not isinstance(account_id, str) or not account_id:
             raise ValueError('Account identity is required.')
@@ -66,11 +88,23 @@ class XBookmarkCatalog:
             raise ValueError('Cursor must be text or None.')
         if type(complete) is not bool:
             raise ValueError('Completeness must be boolean.')
+        if complete and (next_cursor is not None or partial or restart_required):
+            raise ValueError('Eine unvollständige Antwort darf keine vollständige Inventur bestätigen.')
+        if cursor_history is not None and (not isinstance(cursor_history, list) or
+                                          any(not isinstance(v, str) for v in cursor_history)):
+            raise ValueError('Invalid cursor history.')
+        if any(type(v) is not bool for v in (partial, restart_required, begin)):
+            raise ValueError('Import state must be boolean.')
+        seen_ids = [] if seen_ids is None else seen_ids
+        if not isinstance(seen_ids, list) or any(not isinstance(v, str) for v in seen_ids):
+            raise ValueError('Seen identifiers must be text.')
         with self.lock:
             candidate = copy.deepcopy(self.data)
             if candidate['accountId'] not in (None, account_id):
                 raise ValueError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.')
             candidate['accountId'] = account_id
+            if begin:
+                candidate.update(inventorySeen=[], scanStarted=True, partial=False, restartRequired=False, cursorHistory=[])
             for entry in entries:
                 post_id = entry.get('postId')
                 if not isinstance(post_id, str) or not post_id:
@@ -84,7 +118,13 @@ class XBookmarkCatalog:
                 saved['originAccountId'] = account_id
                 candidate['entries'][native_id] = saved
             candidate['checkpoint'] = next_cursor
+            candidate['inventorySeen'] = list(dict.fromkeys(candidate['inventorySeen'] + seen_ids))
             candidate['complete'] = complete
+            candidate['scanStarted'] = not complete
+            candidate['partial'] = not complete
+            candidate['restartRequired'] = False if complete else restart_required
+            if cursor_history is not None:
+                candidate['cursorHistory'] = list(dict.fromkeys(cursor_history))
             candidate['revision'] += 1
             atomic_json(self.path, candidate)
             self.data = candidate

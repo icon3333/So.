@@ -217,4 +217,34 @@ class XConnection:
                 raise StateError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.', 409)
             if not set(SCOPES).issubset(self.tokens.get('scopes', [])):
                 raise StateError('Der X-Anmeldung fehlen erforderliche Berechtigungen.', 403)
-            return BudgetLedger(approval)
+            ledger = BudgetLedger(approval)
+            ledger.account_id, ledger.session_id = self.account['id'], id(self.tokens)
+            return ledger
+
+    def bookmarks_page(self, ledger, account_id, cursor=None, max_results=100, include_author=True):
+        if type(max_results) is not int or not 1 <= max_results <= 100:
+            raise StateError('X-Lesezeichenseiten müssen 1 bis 100 Posts anfordern.', 400)
+        if cursor is not None and (not isinstance(cursor, str) or not cursor or len(cursor) > 4096):
+            raise StateError('Ungültiger X-Seitencursor.', 400)
+        with self.lock:
+            if (not isinstance(ledger, BudgetLedger) or getattr(ledger, 'account_id', None) != account_id
+                    or getattr(ledger, 'session_id', None) != id(self.tokens)):
+                raise StateError('Die X-Kostenfreigabe gehört nicht zu dieser Sitzung.', 409)
+            if (not self.tokens or self.tokens['expires_at'] <= time.time()
+                    or not self.account or self.account['id'] != account_id):
+                raise StateError('X-Anmeldung oder Konto hat sich geändert; bitte Import neu starten.', 409)
+            if not set(SCOPES).issubset(self.tokens.get('scopes', [])):
+                raise StateError('Der X-Anmeldung fehlen erforderliche Berechtigungen.', 403)
+            if self.catalog.data.get('accountId') not in (None, account_id):
+                raise StateError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.', 409)
+            # Reserve worst-case posts and expanded user records before transport.
+            ledger.reserve({'posts': max_results, 'users': max_results if include_author else 0, 'pages': 1})
+            params = {'max_results': max_results,
+                      'post.fields': 'id,text,created_at,article,note_post,attachments,entities',
+                      'expansions': 'author_id' if include_author else '',
+                      'user.fields': 'id,username,protected' if include_author else ''}
+            if cursor is not None:
+                params['pagination_token'] = cursor
+            query = urllib.parse.urlencode({k: v for k, v in params.items() if v})
+            url = API + '/2/users/' + account_id + '/bookmarks?' + query
+            return _safe_json_request(url, headers={'Authorization': 'Bearer ' + self.tokens['access_token']})
