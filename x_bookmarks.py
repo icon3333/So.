@@ -8,6 +8,10 @@ from pathlib import Path
 from triage_state import atomic_json
 
 
+# API refreshes may update source fields, but must not erase local Hermes enrichment.
+ENRICHMENT_KEYS = {'title', 'summary', 'topic', 'takeaway', 'assessment', 'limitations'}
+
+
 class XBookmarkCatalog:
     """Account-scoped native entries plus import checkpoint in one atomic file."""
 
@@ -111,6 +115,11 @@ class XBookmarkCatalog:
                     raise ValueError('Each record requires a postId.')
                 native_id = self.native_id(account_id, post_id)
                 saved = {**candidate['entries'].get(native_id, {}), **copy.deepcopy(entry)}
+                old = candidate['entries'].get(native_id, {})
+                enriched = any(old.get(key) for key in ('summary', 'topic', 'takeaway', 'assessment'))
+                for key in ENRICHMENT_KEYS:
+                    if old.get(key) and (key not in ('title', 'limitations') or enriched):
+                        saved[key] = copy.deepcopy(old[key])
                 saved.pop('id', None)
                 saved.pop('origin', None)
                 saved.pop('originAccountId', None)

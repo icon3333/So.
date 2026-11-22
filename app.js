@@ -2,7 +2,7 @@
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const ui = { collection: 'all', topic: '', source: '', search: '', status: 'saved', page: 0, pageSize: 10, selected: new Set(), busy: false, detailId: null, preview: null };
+const ui = { collection: 'all', platform: '', topic: '', source: '', search: '', status: 'saved', page: 0, pageSize: 10, selected: new Set(), busy: false, detailId: null, preview: null };
 let data = null;
 let remoteIds = null;
 let loginTimer = null;
@@ -121,7 +121,19 @@ function isXArticle(article) {
   catch { return false; }
 }
 function origin(article) { return article.origin === 'x' ? 'x' : 'inoreader'; }
-function eligible(article) { return ui.collection === 'all' || origin(article) === ui.collection; }
+function destinationLabel(article) { return origin(article) === 'x' ? 'X' : 'Inoreader'; }
+function platform(article) {
+  let host;
+  try { host = new URL(article.url).hostname.toLowerCase(); }
+  catch { return 'web'; }
+  if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) return 'youtube';
+  if (['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com'].includes(host)) return 'x';
+  if (host === 'substack.com' || host.endsWith('.substack.com')) return 'substack';
+  return 'web';
+}
+function eligible(article) {
+  return (ui.collection === 'all' || origin(article) === ui.collection) && (!ui.platform || platform(article) === ui.platform);
+}
 function enrichment(article) { return data.xContent?.entries?.[article.id] || (article.origin === 'x' && article.summary ? article : null); }
 function displayTitle(article) { return enrichment(article)?.title || article.title || 'Ohne Titel'; }
 function displayText(article) { const e = enrichment(article); return [e?.summary, e?.text, article.text, article.excerpt, article.author].filter(Boolean).join(' '); }
@@ -151,6 +163,13 @@ function setCollection(collection) {
   ui.collection = collection;
   ui.topic = ''; ui.source = ''; ui.search = ''; ui.status = 'saved';
   $('#search').value = '';
+  resetView();
+}
+
+function setPlatform(value) {
+  ui.platform = value;
+  ui.source = '';
+  if (ui.topic && !data.articles.some(a => eligible(a) && topic(a) === ui.topic)) ui.topic = '';
   resetView();
 }
 
@@ -244,7 +263,7 @@ function renderSourceOptions() {
 }
 
 function decisionLabel(article) {
-  if (isRemoved(article)) return 'Aus „Später lesen“ entfernt';
+  if (isRemoved(article)) return `Aus ${origin(article) === 'x' ? 'X-Lesezeichen' : 'Inoreader „Später lesen“'} entfernt`;
   return { keep: 'Behalten', remove: 'Zum Entfernen vorgemerkt', skip: 'Übersprungen · noch offen' }[choice(article)] || 'Noch offen';
 }
 
@@ -288,7 +307,7 @@ function renderArticle(article) {
     const save = node('button', 'button keep-button row-karakeep', karakeepLabel(article));
     save.type = 'button';
     save.dataset.action = 'karakeep';
-    save.title = 'In Karakeep speichern und danach Entfernung aus Inoreader vormerken';
+    save.title = `In Karakeep speichern und danach Entfernung aus ${destinationLabel(article)} vormerken`;
     save.setAttribute('aria-label', `${karakeepLabel(article)}: ${displayTitle(article)}`);
     save.disabled = karakeepDisabled(article);
     save.addEventListener('click', () => saveToKarakeep(article.id));
@@ -300,7 +319,7 @@ function renderArticle(article) {
     const button = node('button', `row-action ${action}${choice(article) === action ? ' chosen' : ''}`, symbol);
     button.type = 'button';
     button.dataset.action = action;
-    button.title = action === 'remove' ? 'Erst nach „Entfernungen prüfen“ und deiner Bestätigung aus Inoreader entfernen' : description;
+    button.title = action === 'remove' ? `Erst nach „Entfernungen prüfen“ und deiner Bestätigung aus ${destinationLabel(article)} entfernen` : description;
     button.setAttribute('aria-label', `${description}: ${displayTitle(article)}`);
     if (action !== 'clear') button.setAttribute('aria-pressed', String(choice(article) === action));
     button.disabled = ui.busy || isRemoved(article);
@@ -329,6 +348,7 @@ function renderSelection() {
   $$('[data-batch]').forEach((button) => { button.disabled = ui.busy; });
   $('#open-selected').disabled = ui.busy;
   $('#karakeep-selected').disabled = !data.articles.some((a) => ui.selected.has(a.id) && !karakeepDisabled(a));
+  $('#karakeep-selected').title = 'Speichert die ausgewählten Links und merkt ihre Entfernung aus der jeweiligen Herkunft vor.';
 }
 
 function render() {
@@ -390,6 +410,7 @@ function render() {
   $('#x-connect').hidden = Boolean(xConnection.connected);
   $('#x-disconnect').hidden = !xConnection.connected;
   $('#x-import').disabled = ui.busy || !xConnection.connected;
+  $('#x-check').disabled = ui.busy || !xConnection.connected;
   $('#x-import').title = xConnection.connected ? 'Import mit eigener Kostenfreigabe starten' : 'Zuerst X unter „Verbindungen“ anmelden';
   const imported = data.xImport;
   $('#x-import-status').textContent = !imported?.count && !imported?.scanStarted ? 'Noch keine X-Lesezeichen importiert.' : `${imported?.count || 0} lokal gespeichert · ${imported?.complete ? 'API-Inventur vollständig' : imported?.restartRequired ? 'Teilimport · expliziter Neustart nötig' : 'Teilimport · Fortsetzung möglich'}`;
@@ -528,7 +549,7 @@ function renderDetails() {
   if (!article) { $('#detail-dialog').close(); return; }
   $('#detail-ref').textContent = `ARTIKEL ${article.ref || ''}`;
   $('#detail-title').textContent = displayTitle(article);
-  $('#detail-meta').textContent = `${origin(article) === 'x' ? 'X-Lesezeichen' : 'Inoreader'} · ${source(article)} · ${article.author || 'Autor nicht mitgeliefert'} · ${formatDate(article.published || article.createdAt)} · ${topic(article)}`;
+  $('#detail-meta').textContent = `Herkunft: ${origin(article) === 'x' ? 'X-Lesezeichen' : 'Inoreader'} · Plattform: ${{youtube:'YouTube',x:'X',substack:'Substack',web:'Webseite / Sonstiges'}[platform(article)]} · ${source(article)} · ${article.author || 'Autor nicht mitgeliefert'} · ${formatDate(article.published || article.createdAt)} · ${topic(article)}`;
   $('#detail-status').textContent = decisionLabel(article);
   $('#detail-karakeep').textContent = karakeepLabel(article);
   $('#detail-karakeep').disabled = karakeepDisabled(article);
@@ -537,6 +558,8 @@ function renderDetails() {
   if (url) $('#detail-link').href = url; else $('#detail-link').removeAttribute('href');
   const content = enrichment(article);
   const native = origin(article) === 'x';
+  $('#detail-dialog .karakeep-note').textContent = `Speichert den Link und merkt anschließend die Entfernung aus ${native ? 'X-Lesezeichen' : 'Inoreader „Später lesen“'} vor. Die Herkunft ändert sich erst nach eigener Vorschau und Bestätigung.`;
+  $('#detail-dialog .drawer-note').textContent = 'Entfernen betrifft nur die gespeicherte Zuordnung in der jeweiligen Herkunft, nicht den ursprünglichen Beitrag.';
   $('#detail-excerpt').textContent = content?.text?.trim() || article.text?.trim() || article.excerpt?.trim() || (native ? 'Kein lesbarer Rohtext mitgeliefert; Auswertung fehlt.' : 'Für diesen Artikel ist kein lesbarer Auszug vorhanden.');
   $('#detail-missing').hidden = native ? Boolean(content?.summary) : (!isXArticle(article) || content?.status === 'read');
   $('#detail-missing').textContent = native ? (content?.summary ? 'Zusammenfassung vorhanden; Rohtext und Einschränkungen siehe unten.' : 'Rohtext; Auswertung fehlt. Es wird keine Zusammenfassung erfunden.') : (content ? `X-Inhalt: ${content.status === 'partial' ? 'Teilweise lesbar – Einschränkungen stehen unten.' : content.status === 'unavailable' ? 'Nicht verfügbar. Erneut abrufen ist möglich.' : 'Angereichert.'}` : 'Noch nicht abgerufen. „X-Inhalt abrufen“ lädt nur den Rohtext und erfindet keine Zusammenfassung.');
@@ -576,27 +599,56 @@ async function showPreview() {
   try {
     ui.preview = await request('/api/sync/preview');
     if (!Array.isArray(ui.preview.items)) throw new Error('Die Vorschau konnte nicht geladen werden.');
-    $('#sync-description').textContent = `${ui.preview.items.length} ${ui.preview.items.length === 1 ? 'vorgemerkter Artikel wird' : 'vorgemerkte Artikel werden'} aus deiner Liste entfernt. Prüfe die Auswahl, bevor du bestätigst.`;
+    const groups = ui.preview.groups || {inoreader:{count:ui.preview.items.length,available:true},x:{count:0,available:false}};
+    const xCount = groups.x.count || 0;
+    $('#sync-description').textContent = `${groups.inoreader.count} Inoreader-Einträge${groups.inoreader.available ? '' : ' (derzeit nicht verbunden)'} und ${xCount} X-Lesezeichen${groups.x.available ? '' : xCount ? ' (nicht verbunden; bleiben vorgemerkt)' : ''}. Nur verbundene Quellen werden bearbeitet; nicht verfügbare Einträge bleiben vorgemerkt.`;
     $('#sync-items').replaceChildren(...ui.preview.items.map((article) => {
       const item = node('li', '', article.title || 'Ohne Titel');
-      item.append(node('span', '', `#${article.ref || '–'} · ${source(article)}`));
+      item.append(node('span', '', `Herkunft: ${origin(article) === 'x' ? 'X' : 'Inoreader'} · #${article.ref || '–'} · ${source(article)}`));
       return item;
     }));
     $('#sync-error').hidden = true;
-    $('#confirm-sync').textContent = `${ui.preview.items.length} Artikel jetzt entfernen`;
-    $('#confirm-sync').disabled = !ui.preview.items.length;
+    const cost = ui.preview.xCost || {deleteUsdEach:.010,verificationPostUsdEach:.005,verificationPosts:xCount,pages:1};
+    $('#sync-x-controls').hidden = !(groups.x.available && xCount);
+    $('#sync-x-approval').checked = false;
+    $('#sync-x-posts').value = String(cost.verificationPosts);
+    $('#sync-x-pages').value = String(cost.pages);
+    updateSyncQuote();
+    $('#confirm-sync').textContent = `${ui.preview.items.length} vorgemerkte Einträge prüfen`;
+    $('#confirm-sync').disabled = !ui.preview.items.length || (!groups.inoreader.available && !(groups.x.available && xCount)) || (groups.x.available && xCount > 0 && !$('#sync-x-approval').checked);
     $('#sync-dialog').showModal();
   } catch (error) { notice(error.message, true); }
   finally { ui.busy = false; render(); }
 }
 
+function removalBudget() {
+  const groups=ui.preview.groups, xCount=groups?.x?.available?groups.x.count:0;
+  const posts=Number($('#sync-x-posts').value), pages=Number($('#sync-x-pages').value);
+  if(xCount&&(!Number.isSafeInteger(posts)||posts<1||!Number.isSafeInteger(pages)||pages<1)) throw new Error('Bitte positive ganzzahlige Obergrenzen für Rückprüfposts und Seiten eingeben.');
+  const verification_posts=xCount?posts:0;
+  const mills=xCount*10+verification_posts*5;
+  return {posts:0,users:0,mutations:xCount,verification_posts,pages:xCount?pages:0,usd:mills/1000};
+}
+function updateSyncQuote() {
+  if(!ui.preview)return;
+  $('#sync-x-approval').checked=false;
+  try { const b=removalBudget(); $('#sync-x-quote').textContent=`${b.mutations} X-DELETE + höchstens ${b.verification_posts} Verifikationsposts / ${b.pages} Seiten · maximal ${b.usd.toFixed(3)} USD. Teilbestätigung ist möglich; keine automatische Wiederholung. Nach jedem Versuch ist eine neue Vorschau nötig.`; }
+  catch(e){$('#sync-x-quote').textContent=e.message;}
+  $('#confirm-sync').disabled=ui.busy||!ui.preview.items.length||(ui.preview.groups?.x?.available&&ui.preview.groups.x.count>0&&!$('#sync-x-approval').checked);
+}
+
 async function sync() {
   if (!ui.preview || ui.busy) return;
+  const preview=ui.preview;
+  let budget; try{budget=removalBudget();}catch(e){notice(e.message,true);return;}
+  const xCount=preview.groups?.x?.available?preview.groups.x.count:0;
+  if(xCount&&!$('#sync-x-approval').checked){notice('Bitte den X-Lösch- und Verifikationsrahmen ausdrücklich bestätigen.',true);return;}
   $('#confirm-sync').disabled = true;
-  $('#confirm-sync').textContent = 'Wird in Inoreader geprüft …';
+  $('#confirm-sync').textContent = 'Wird je Herkunft geprüft …';
   $('#cancel-sync').disabled = true;
   $('#close-sync').disabled = true;
-  const result = await perform(() => request('/api/sync', { version: ui.preview.version, ids: ui.preview.items.map((article) => article.id) }));
+  ui.preview=null;
+  const result = await perform(() => request('/api/sync', { version: preview.version, ids: preview.items.map((article) => article.id), confirmationToken: preview.confirmationToken, catalogRevision: preview.catalogRevision, ...budget }));
   $('#cancel-sync').disabled = false;
   $('#close-sync').disabled = false;
   if (result) {
@@ -606,11 +658,30 @@ async function sync() {
     notice(result.result?.message || `${confirmed} Entfernungen bestätigt.${unconfirmed ? ` ${unconfirmed} konnten noch nicht bestätigt werden. Prüfe den Live-Stand erneut.` : ''}`, unconfirmed > 0);
     ui.preview = null;
   } else {
-    $('#sync-error').textContent = 'Die Entfernung ist nicht bestätigt. Schließe diese Vorschau und prüfe den aktuellen Stand, bevor du es erneut versuchst.';
+    $('#sync-error').textContent = 'Der Versuch wurde nicht bestätigt. Die Einmal-Vorschau ist verbraucht. Bitte schließe den Dialog und lade eine neue Vorschau; es erfolgt kein automatischer Wiederholungsversuch.';
     $('#sync-error').hidden = false;
     $('#confirm-sync').textContent = 'Erneute Vorschau erforderlich';
     $('#confirm-sync').disabled = true;
   }
+}
+
+function showXCheck() {
+  if(ui.busy||!data.xConnection?.connected)return;
+  $('#x-check-posts').value=String(Math.max(100,data.xImport?.count||0));
+  $('#x-check-pages').value=String(Math.max(1,Math.ceil((data.xImport?.count||0)/100)));
+  updateXCheckQuote(); $('#x-check-dialog').showModal();
+}
+function xCheckBudget() {
+  const posts=Number($('#x-check-posts').value),pages=Number($('#x-check-pages').value);
+  if(!Number.isSafeInteger(posts)||posts<1||!Number.isSafeInteger(pages)||pages<1)throw new Error('Bitte positive ganzzahlige Obergrenzen für Prüfposts und Seiten eingeben.');
+  return {posts:0,users:0,mutations:0,verification_posts:posts,pages,usd:Math.round(posts*5)/1000};
+}
+function updateXCheckQuote(){ $('#x-check-approval').checked=false;try{const b=xCheckBudget();$('#x-check-quote').textContent=`Nur lesend: höchstens ${b.verification_posts} Prüfposts / ${b.pages} Seiten · maximal ${b.usd.toFixed(3)} USD. Unvollständige Prüfung lässt die Mitgliedschaft unbekannt.`;}catch(e){$('#x-check-quote').textContent=e.message;}$('#confirm-x-check').disabled=true; }
+async function runXCheck(){
+  if(ui.busy||!data.xConnection?.connected)return;let budget;try{budget=xCheckBudget();}catch(e){notice(e.message,true);return;}
+  if(!$('#x-check-approval').checked){notice('Bitte den reinen Lese-Kostenrahmen ausdrücklich bestätigen.',true);return;}
+  const result=await perform(()=>request('/api/x/check',budget));
+  if(result){$('#x-check-dialog').close();notice(result.xMembership?.complete?'X-Mitgliedschaft vollständig geprüft.':'X-Prüfung unvollständig: Mitgliedschaft bleibt unbekannt; es wurde kein DELETE gesendet.',!result.xMembership?.complete);}
 }
 
 async function pollConnection() {
@@ -656,6 +727,7 @@ $('#all-topics').addEventListener('click', () => { ui.topic = ''; resetView(); }
 $$('[data-collection]').forEach(button => button.addEventListener('click', () => setCollection(button.dataset.collection)));
 $('#search').addEventListener('input', (event) => { ui.search = event.target.value.trim(); if (data) resetView(); });
 $('#source').addEventListener('change', (event) => { ui.source = event.target.value; resetView(); });
+$('#platform').addEventListener('change', (event) => setPlatform(event.target.value));
 $('#page-size').addEventListener('change', (event) => { ui.pageSize = Number(event.target.value); resetView(); });
 $$('.status-tab').forEach((button) => button.addEventListener('click', () => { ui.status = button.dataset.status; resetView(); }));
 $('#select-all').addEventListener('change', (event) => {
@@ -699,6 +771,13 @@ $('#x-connect').addEventListener('click', async () => {
   finally { ui.busy = false; render(); }
 });
 $('#x-import').addEventListener('click', openXImport);
+$('#x-check').addEventListener('click', showXCheck);
+for(const id of ['x-check-posts','x-check-pages']) $(`#${id}`).addEventListener('input',updateXCheckQuote);
+$('#x-check-approval').addEventListener('change',()=>{try{xCheckBudget();$('#confirm-x-check').disabled=ui.busy||!$('#x-check-approval').checked;}catch{$('#confirm-x-check').disabled=true;}});
+$('#confirm-x-check').addEventListener('click',runXCheck);
+for(const id of ['close-x-check','cancel-x-check']) $(`#${id}`).addEventListener('click',()=>{if(!ui.busy)$('#x-check-dialog').close();});
+for(const id of ['sync-x-posts','sync-x-pages']) $(`#${id}`).addEventListener('input',updateSyncQuote);
+$('#sync-x-approval').addEventListener('change',()=>{try{removalBudget();$('#confirm-sync').disabled=ui.busy||!ui.preview?.items?.length||(ui.preview.groups?.x?.count>0&&ui.preview.groups.x.available&&!$('#sync-x-approval').checked);}catch{$('#confirm-sync').disabled=true;}});
 $('#confirm-x-import').addEventListener('click', confirmXImport);
 for (const id of ['x-import-posts', 'x-import-users', 'x-import-pages', 'x-import-restart']) $(`#${id}`).addEventListener('input', updateXImportQuote);
 $('#x-import-approval').addEventListener('change', () => {
@@ -721,6 +800,7 @@ $('#close-detail').addEventListener('click', () => $('#detail-dialog').close());
 $('#detail-dialog').addEventListener('close', () => { ui.detailId = null; restoreFocus(detailOpener); detailOpener = null; });
 for (const id of ['close-sync', 'cancel-sync']) $(`#${id}`).addEventListener('click', () => $('#sync-dialog').close());
 $('#sync-dialog').addEventListener('cancel', (event) => { if (ui.busy) event.preventDefault(); });
+$('#x-check-dialog').addEventListener('cancel',(event)=>{if(ui.busy)event.preventDefault();});
 $('#confirm-sync').addEventListener('click', sync);
 
 $('#select-all').disabled = true;

@@ -73,6 +73,48 @@ test('connection and busy guards prevent bulk writes', async () => {
   assert.deepEqual(h.calls, []);
 });
 
+test('a pending X membership check prevents a concurrent disconnect request', async () => {
+  const h = harness();
+  const get = fakeDom(h);
+  get('#x-check-posts').value = '100';
+  get('#x-check-pages').value = '1';
+  get('#x-check-approval').checked = true;
+  const paths = [];
+  let completeCheck;
+  h.context.transport = path => {
+    paths.push(path);
+    return new Promise(resolve => { completeCheck = resolve; });
+  };
+  vm.runInContext('data.xConnection = {connected:true}; request = transport;', h.context);
+  const pending = vm.runInContext('runXCheck()', h.context);
+  assert.equal(h.value('ui.busy'), true);
+  await vm.runInContext("perform(() => request('/api/x/disconnect', {}))", h.context);
+  assert.deepEqual(paths, ['/api/x/check']);
+  assert.equal(h.value('data.xConnection.connected'), true);
+  completeCheck({...h.value('data'), xMembership: {complete:true}});
+  await pending;
+  assert.equal(h.value('ui.busy'), false);
+  assert.equal(h.value('data.xConnection.connected'), true);
+});
+
+test('row action copy names the article origin for Inoreader and native X', () => {
+  const h = harness();
+  const elements = [];
+  h.context.node = (tag, cls, text = '') => {
+    const el = { tag, className: cls, textContent: text, children: [], dataset: {}, setAttribute(name, value) { this[name] = value; }, append(...items) { this.children.push(...items); }, addEventListener() {} };
+    elements.push(el); return el;
+  };
+  vm.runInContext(`renderArticle({id:'ir',origin:'inoreader',url:'https://example.org/ir',title:'IR'}); renderArticle({id:'native',origin:'x',url:'https://x.com/i/status/1',title:'X'})`, h.context);
+  assert.deepEqual(elements.filter(e => e.dataset.action === 'karakeep').map(e => e.title), [
+    'In Karakeep speichern und danach Entfernung aus Inoreader vormerken',
+    'In Karakeep speichern und danach Entfernung aus X vormerken'
+  ]);
+  assert.deepEqual(elements.filter(e => e.dataset.action === 'remove').map(e => e.title), [
+    'Erst nach „Entfernungen prüfen“ und deiner Bestätigung aus Inoreader entfernen',
+    'Erst nach „Entfernungen prüfen“ und deiner Bestätigung aus X entfernen'
+  ]);
+});
+
 test('legacy payload keeps all entries and source provenance is not URL domain', () => {
   const h = harness();
   vm.runInContext(`
@@ -109,6 +151,37 @@ function fakeDom(h) {
   get('#x-import-pages').value = '1';
   return get;
 }
+
+test('platform classification is independent of bookmark origin and rejects lookalike hosts', () => {
+  const h = harness();
+  vm.runInContext(`data.articles=[
+    {id:'ir-x',origin:'inoreader',url:'https://x.com/u/status/101'},
+    {id:'native-x',origin:'x',url:'https://x.com/u/status/101'},
+    {id:'video',origin:'inoreader',url:'https://youtu.be/video'},
+    {id:'newsletter',origin:'inoreader',url:'https://writer.substack.com/p/story'},
+    {id:'html',origin:'inoreader',url:'https://example.org/article'},
+    {id:'spoof',origin:'inoreader',url:'https://youtube.com.evil.example/video'}];
+    ui.collection='all'; ui.platform=''; ui.topic=''; ui.source=''; ui.search=''; ui.status='all'`, h.context);
+  assert.deepEqual(h.value('data.articles.map(platform)'), ['x','x','youtube','substack','web','web']);
+  vm.runInContext("ui.platform='x'", h.context);
+  assert.deepEqual(h.value('scopedArticles().map(a=>a.id)'), ['ir-x','native-x']);
+  vm.runInContext("ui.collection='inoreader'", h.context);
+  assert.deepEqual(h.value('scopedArticles().map(a=>a.id)'), ['ir-x']);
+  vm.runInContext("ui.platform='youtube'", h.context);
+  assert.deepEqual(h.value('scopedArticles().map(a=>a.id)'), ['video']);
+});
+
+test('platform changes clear stale selection without changing removal origin', () => {
+  const h = harness();
+  fakeDom(h);
+  vm.runInContext("initial.articles[0].url='https://x.com/u/status/101'; applyState(initial); ui.source='old'; setPlatform('x')", h.context);
+  assert.equal(h.value('ui.collection'), 'all');
+  assert.equal(h.value('ui.source'), '');
+  assert.deepEqual(h.value('[...ui.selected]'), []);
+  assert.deepEqual(h.value('scopedArticles().map(a=>origin(a))'), ['inoreader']);
+  vm.runInContext("setCollection('inoreader')", h.context);
+  assert.equal(h.value('ui.platform'), 'x');
+});
 
 test('native records remain visible with Inoreader membership and combined savedIds', () => {
   const h = harness();
@@ -166,4 +239,29 @@ test('invalid cursor needs explicit restart and native detail keeps full raw tex
   assert.match(get('#detail-enrichment').textContent, /Video nicht geprüft/);
   assert.match(get('#detail-enrichment').textContent, /geschützt/);
   assert.equal(get('#detail-link').href, 'https://x.com/i/status/2');
+});
+
+test('native removal requires fresh preview, explicit cost approval and passes exact bound token', async () => {
+  const h=harness(),get=fakeDom(h),sent=[];
+  const preview={version:7,catalogRevision:'rev-2',accountId:'acct',confirmationToken:'once',items:[{id:'x1',origin:'x',title:'native'}],groups:{inoreader:{count:0,available:false},x:{count:1,available:true}},xCost:{deleteUsdEach:.010,verificationPostUsdEach:.005,verificationPosts:10,pages:2}};
+  h.context.initialPreview=preview;
+  h.context.syncTransport=async(path,body)=>{sent.push({path,body});return {result:{confirmed:[],unconfirmed:['x1'],skipped:[],verificationComplete:false,message:'uncertain'}};};
+  vm.runInContext("ui.preview=initialPreview; request=syncTransport; perform=async op=>{try{return await op()}catch(e){return null}}",h.context);
+  get('#sync-x-posts').value='10';get('#sync-x-pages').value='2';get('#confirm-sync').disabled=false;
+  await vm.runInContext('sync()',h.context); assert.equal(sent.length,0);
+  get('#sync-x-approval').checked=true; await vm.runInContext('sync()',h.context);
+  assert.equal(sent.length,1);assert.equal(sent[0].path,'/api/sync');
+  assert.deepEqual(JSON.parse(JSON.stringify(sent[0].body)),{version:7,ids:['x1'],confirmationToken:'once',catalogRevision:'rev-2',posts:0,users:0,mutations:1,verification_posts:10,pages:2,usd:.06});
+  assert.equal(h.value('ui.preview'),null);
+});
+
+test('read-only X check requires approval and sends zero mutations', async()=>{
+  const h=harness(),get=fakeDom(h),sent=[];
+  h.context.checkTransport=async(path,body)=>{sent.push({path,body});return {xMembership:{complete:false}};};
+  vm.runInContext("data.xConnection={connected:true}; data.xCost={verificationPosts:20,pages:3}; request=checkTransport; perform=async op=>op()",h.context);
+  get('#x-check-posts').value='4';get('#x-check-pages').value='2';
+  await vm.runInContext('runXCheck()',h.context);assert.equal(sent.length,0);
+  get('#x-check-approval').checked=true;await vm.runInContext('runXCheck()',h.context);
+  assert.equal(sent[0].path,'/api/x/check');assert.deepEqual(JSON.parse(JSON.stringify(sent[0].body)),{posts:0,users:0,mutations:0,verification_posts:4,pages:2,usd:.02});
+  assert.match(h.messages.at(-1),/unbekannt/);
 });

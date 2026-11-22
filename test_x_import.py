@@ -21,7 +21,50 @@ class XImportTests(unittest.TestCase):
         self.approval = {'posts': 5, 'users': 5, 'pages': 5, 'usd': .1}
 
     def page(self, posts, cursor=None, **extra):
-        return {'data': posts, 'meta': ({'next_token': cursor} if cursor else {}), **extra}
+        meta = {'result_count': len(posts)}
+        if cursor:
+            meta['next_token'] = cursor
+        return {'data': posts, 'meta': meta, **extra}
+
+    def test_missing_result_count_keeps_import_partial_and_does_not_apply_membership(self):
+        response = {'data': [{'id': '101', 'text': 'returned'}], 'meta': {}}
+        with patch('x_connection._safe_json_request', return_value=response), \
+                patch.object(self.app.store, 'apply_x_remote') as apply:
+            result = self.app.import_x_bookmarks(self.approval, max_pages=1, max_results=1)
+        self.assertFalse(result['xImport']['complete'])
+        self.assertEqual(result['xImport']['partialReason'], 'invalid_response')
+        apply.assert_not_called()
+        self.assertFalse(self.app.x_bookmarks.data['complete'])
+
+    def test_fresh_import_failure_unknowns_previously_complete_membership(self):
+        self.app.store.x_account_id = '12345'
+        self.app.x_bookmarks.merge_page('12345', [{'postId': '99'}], None, complete=True)
+        self.app.refresh_catalog()
+        self.app.store.apply_x_remote('12345', ['99'], 'fixture')
+        self.app.store.decide(self.app.store.view()['version'], ['x:12345:99'], 'remove')
+        # A local removal decision must not pretend the remote bookmark was removed.
+        self.assertTrue(self.app.store.is_saved('x:12345:99'))
+        with patch('x_connection._safe_json_request', side_effect=StateError('fixture failure', 502)):
+            with self.assertRaises(StateError):
+                self.app.import_x_bookmarks(self.approval, max_pages=1, max_results=1)
+        self.assertIsNone(self.app.store.view()['xRemote']['starredIds'])
+        self.assertFalse(self.app.x_bookmarks.status()['complete'])
+        self.assertTrue(self.app.store.is_saved('x:12345:99'))
+        self.assertIn('x:12345:99', self.app.preview_removals()['items'][0]['id'] if self.app.preview_removals()['items'] else '')
+
+    def test_reimport_preserves_all_truthy_enrichment(self):
+        self.app.x_bookmarks.merge_page('12345', [{'postId': '101', 'title': 'source title',
+            'limitations': ['API default']}], None, complete=True)
+        self.app.x_bookmarks.merge_page('12345', [{'postId': '101', 'title': 'Hermes title',
+            'limitations': ['Hermes limitation'], 'summary': 'Local summary', 'topic': 'Local topic'}], None)
+        self.app.x_bookmarks.merge_page('12345', [{'postId': '101', 'title': 'changed source title',
+            'limitations': ['API default'], 'text': 'new raw body'}], None)
+        entry = self.app.x_bookmarks.articles()[0]
+        self.assertEqual(entry['title'], 'Hermes title')
+        self.assertEqual(entry['limitations'], ['Hermes limitation'])
+        self.assertEqual(entry['summary'], 'Local summary')
+        self.assertEqual(entry['topic'], 'Local topic')
+        self.assertEqual(entry['text'], 'new raw body')
 
     def test_manual_paged_import_restart_keeps_decisions_enrichment_and_content(self):
         responses = [self.page([{'id': '101', 'text': 'first raw body', 'author_id': 'u1'}], 'next'),
@@ -58,7 +101,9 @@ class XImportTests(unittest.TestCase):
         self.assertFalse(result['xImport']['complete'])
         self.assertIn('x:12345:99', self.app.store.articles)
         self.assertIn('x:12345:101', self.app.store.articles)
-        self.assertNotIn('x:12345:99', self.app.store.view().get('xRemote', {}).get('starredIds', []))
+        self.assertIsNone(self.app.store.view()['xRemote']['starredIds'])
+        self.assertTrue(self.app.store.is_saved('x:12345:99'))
+        self.assertTrue(self.app.store.is_saved('x:12345:101'))
 
     def test_invalid_cursor_requires_explicit_restart_and_new_approval(self):
         self.app.x_bookmarks.merge_page('12345', [{'postId': '101', 'text': 'existing'}], 'invalid')

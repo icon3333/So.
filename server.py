@@ -3,6 +3,7 @@ import argparse
 import html
 import json
 import re
+import secrets
 import threading
 import urllib.error
 import urllib.parse
@@ -59,7 +60,8 @@ class App:
         self.x_content = load_x_content(self.x_content_path)
         self.connection = Connection(root, origin)
         self.karakeep = KarakeepConnection()
-        self.operation_lock = threading.Lock()
+        self.operation_lock = threading.RLock()
+        self.removal_confirmations = {}
 
     def payload(self):
         if getattr(self, 'x_content_path', None) and self.x_content_path.exists():
@@ -143,6 +145,7 @@ class App:
                 cursors.add(cursor)
             pages = 0
             begin = not inventory['started']
+            previously_complete = bool(self.x_bookmarks.data.get('complete'))
             partial_reason = None
             for _ in range(max_pages):
                 with self.x_connection.lock:
@@ -162,6 +165,12 @@ class App:
                         raise StateError('Die Kostenfreigabe reicht nicht für eine weitere Importseite.', 403)
                     partial_reason = 'budget_exhausted'
                     break
+                if begin and previously_complete:
+                    # Invalidate old absence proof before a fresh, approved scan can fail.
+                    self.refresh_catalog()
+                    self.store.mark_x_membership_unknown(account_id)
+                    self.x_bookmarks.merge_page(account_id, [], None, begin=True, partial=True)
+                    begin = False
                 try:
                     response = self.x_connection.bookmarks_page(ledger, account_id, cursor, page_size,
                                                                 include_author=include_author)
@@ -198,10 +207,11 @@ class App:
                     if item:
                         normalized.append(item)
                         ids.append(item['postId'])
+                result_count = meta.get('result_count') if isinstance(response.get('meta'), dict) else None
                 malformed = (not isinstance(response.get('meta'), dict) or len(normalized) != len(data)
                              or len(set(ids)) != len(ids)
-                             or ('result_count' in meta and
-                                 (type(meta['result_count']) is not int or meta['result_count'] != len(data))))
+                             or type(result_count) is not int
+                             or result_count != len(data))
                 if errors or malformed:
                     details = errors if isinstance(errors, list) else []
                     title = ' '.join(str(e.get('title', '')) + ' ' + str(e.get('detail', ''))
@@ -270,14 +280,122 @@ class App:
         with self.operation_lock, self.store.lock:
             self.store.check_version(version)
             self.store.ids([article_id])
+            origin_label = 'X-Lesezeichen' if self.store.is_native(article_id) else 'Inoreader „Später lesen“'
             receipt = self.karakeep.save(self.store.articles[article_id]['url'])
             try:
                 self.store.record_karakeep_saved(version, article_id, receipt)
             except OSError:
-                raise StateError('In Karakeep gespeichert, aber die lokale Vormerkung konnte nicht gespeichert werden. Bitte freien Speicherplatz prüfen; Inoreader wurde nicht verändert.', 500) from None
+                raise StateError('In Karakeep gespeichert, aber die lokale Vormerkung konnte nicht gespeichert werden. Bitte freien Speicherplatz prüfen; %s wurde nicht verändert.' % origin_label, 500) from None
             result = self.payload()
-            result['result'] = {'message': 'In Karakeep gespeichert und zum Entfernen aus „Später lesen“ vorgemerkt. Inoreader wird erst nach deiner Abgleich-Bestätigung geändert.'}
+            result['result'] = {'message': 'In Karakeep gespeichert. Entfernung aus %s ist vorgemerkt; geändert wird die Herkunft erst nach separater Vorschau und deiner Bestätigung.' % origin_label}
             return result
+
+    def preview_removals(self):
+        with self.operation_lock, self.store.lock:
+            preview = self.store.preview()
+            groups = {'inoreader': {'count': 0, 'available': bool(self.connection.status().get('connected'))},
+                      'x': {'count': 0, 'available': bool(self.x_connection.status().get('connected'))}}
+            for item in preview['items']:
+                groups['x' if self.store.is_native(item['id']) else 'inoreader']['count'] += 1
+            account = self.x_bookmarks.data.get('accountId')
+            session = id(self.x_connection.tokens) if groups['x']['available'] else None
+            revision = self.x_bookmarks.data.get('revision') if getattr(self, 'x_bookmarks', None) else None
+            token = secrets.token_urlsafe(32)
+            self.removal_confirmations = {token: {'version': preview['version'], 'ids': tuple(i['id'] for i in preview['items']),
+                'revision': revision, 'account': account, 'session': session, 'xAvailable': groups['x']['available']}}
+            preview.update(catalogRevision=revision, accountId=account, confirmationToken=token,
+                groups=groups, xCost={'deleteUsdEach': 0.010, 'verificationPostUsdEach': 0.005,
+                                      'verificationPosts': max(100, len(self.x_bookmarks.data['entries'])),
+                                      'pages': max(1, (len(self.x_bookmarks.data['entries']) + 99) // 100)})
+            return preview
+
+    def confirm_removals(self, version, ids, token, revision, approval):
+        with self.operation_lock, self.store.lock:
+            if (not isinstance(token, str) or type(revision) is not int or
+                    not isinstance(ids, list) or any(not isinstance(i, str) for i in ids)):
+                raise StateError('Eine gültige Entfernungsvorschau ist erforderlich.', 409)
+            binding = self.removal_confirmations.get(token)
+            if (not binding or binding['version'] != version or binding['ids'] != tuple(ids)
+                    or binding['revision'] != revision):
+                raise StateError('Vorschau ist veraltet oder wurde bereits verwendet. Bitte neu prüfen.', 409)
+            self.store.check_sync(version, ids)
+            if self.x_bookmarks.data.get('revision') != revision:
+                raise StateError('X-Katalog hat sich geändert. Bitte neu prüfen.', 409)
+            native = [i for i in ids if self.store.is_native(i)]
+            ir = [i for i in ids if not self.store.is_native(i)]
+            ledger = None
+            if native and binding['xAvailable']:
+                if (not self.x_connection.status().get('connected') or
+                    (self.x_connection.account or {}).get('id') != binding['account'] or id(self.x_connection.tokens) != binding['session']):
+                    raise StateError('X-Sitzung oder Konto hat sich geändert. Bitte neu prüfen.', 409)
+                ledger = self.x_connection.new_operation(approval)
+                cap = ledger.approval
+                if cap['verification_posts'] < 1 or cap['pages'] < 1:
+                    raise StateError('Vor der Entfernung muss eine kostenbegrenzte Rückprüfung freigegeben sein.', 403)
+                ledger.require_capacity({'mutations': len(native), 'verification_posts': cap['verification_posts'], 'pages': cap['pages']})
+            # A nonce is spent before any read/write side effect, including ambiguous failures.
+            self.removal_confirmations.pop(token)
+            confirmed, skipped = [], []
+            if ir and self.connection.status().get('connected'):
+                try:
+                    result=self.sync(version, ir)
+                    confirmed += result.get('result',{}).get('confirmed',[])
+                except (StateError, OSError):
+                    pass  # Source remains unconfirmed; never roll back a different provider.
+            elif ir:
+                skipped.extend(ir)
+            proof_complete = False
+            if native and ledger is not None:
+                for article_id in native:
+                    try:
+                        self.x_connection.delete_bookmark(ledger, binding['account'], self.store.articles[article_id]['postId'])
+                    except StateError as exc:
+                        if exc.status in (401, 403, 409, 429):
+                            break
+                        # A timeout may mean success. Do not repeat this DELETE.
+                try:
+                    remote=self._check_x_ledger(ledger)
+                    proof_complete = remote['complete']
+                    if proof_complete:
+                        stars=set(remote['starredIds'])
+                        for article_id in native:
+                            if self.store.articles[article_id]['postId'] not in stars:
+                                confirmed.append(article_id)
+                except (StateError, OSError):
+                    pass  # Readback or local persistence failed: keep every native item unclear.
+            elif native:
+                skipped.extend(native)
+            confirmed = [i for i in ids if i in set(confirmed)]
+            unconfirmed = [i for i in ids if i not in confirmed]
+            out=self.payload()
+            out['result']={'confirmed':confirmed,'unconfirmed':unconfirmed,
+                'skipped':skipped, 'verificationComplete':not unconfirmed,
+                'xVerificationComplete':proof_complete, 'budget':ledger.status() if ledger else None,
+                'message':('%s Entfernungen bestätigt; %s noch offen oder unklar. Nicht verbundene Dienste bleiben unverändert. Es wurde kein DELETE automatisch wiederholt.' % (len(confirmed),len(unconfirmed)))}
+            return out
+
+    def check_x_membership(self, approval):
+        with self.operation_lock, self.store.lock:
+            ledger = self.x_connection.new_operation(approval)
+            if ledger.approval['verification_posts'] < 1 or ledger.approval['pages'] < 1:
+                raise StateError('Die reine X-Standprüfung benötigt eine ausdrückliche Lese- und Kostenfreigabe.', 403)
+            if ledger.approval['mutations']:
+                raise StateError('Die Standprüfung darf keine Mutationen freigeben.', 400)
+            membership = self._check_x_ledger(ledger)
+            out = self.payload()
+            out['xMembership'] = membership
+            return out
+
+    def _check_x_ledger(self, ledger):
+        membership = self.x_connection.membership(ledger)
+        with self.x_connection.lock:
+            if (id(self.x_connection.tokens) != ledger.session_id or
+                    (self.x_connection.account or {}).get('id') != ledger.account_id):
+                membership = {**membership, 'complete': False, 'reason': 'session_changed'}
+                membership.pop('starredIds', None)
+            if membership['complete']:
+                self.store.apply_x_remote(ledger.account_id, membership['starredIds'], now())
+        return membership
 
     def refresh(self):
         with self.operation_lock, self.store.lock:
@@ -377,7 +495,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/state':
                 self.send(self.app.payload())
             elif path == '/api/sync/preview':
-                self.send(self.app.store.preview())
+                self.send(self.app.preview_removals())
+
             elif path in ('/', '/index.html', '/app.js', '/styles.css'):
                 filename = 'index.html' if path == '/' else path[1:]
                 types = {'index.html': 'text/html; charset=utf-8', 'app.js': 'text/javascript; charset=utf-8', 'styles.css': 'text/css; charset=utf-8'}
@@ -430,8 +549,13 @@ class Handler(BaseHTTPRequestHandler):
                                                       body.get('maxResults', 100), body.get('restart', False)))
             elif path == '/api/refresh':
                 self.send(self.app.refresh())
+            elif path == '/api/x/check':
+                approval = {key: body.get(key, 0) for key in ('posts','users','mutations','verification_posts','pages','usd')}
+                self.send(self.app.check_x_membership(approval))
             elif path == '/api/sync':
-                self.send(self.app.sync(body.get('version'), body.get('ids')))
+                approval = {key: body.get(key, 0) for key in ('posts','users','mutations','verification_posts','pages','usd')}
+                self.send(self.app.confirm_removals(body.get('version'), body.get('ids'), body.get('confirmationToken'),
+                                                     body.get('catalogRevision'), approval))
             elif path == '/api/karakeep/connect':
                 self.send(self.app.connect_karakeep(body.get('apiKey')))
             elif path == '/api/karakeep/save':

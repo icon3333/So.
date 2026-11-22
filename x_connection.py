@@ -26,7 +26,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _safe_json_request(url, data=None, headers=None, form=False):
+def _safe_json_request(url, data=None, headers=None, form=False, method=None):
+    if method not in (None, 'DELETE'):
+        raise StateError('X-Anfragemethode nicht zugelassen.', 400)
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != 'https' or parts.hostname != 'api.x.com' or parts.port not in (None, 443) or parts.username or parts.password:
         raise StateError('X-Verbindung: ungültiger Endpunkt.', 502)
@@ -35,7 +37,7 @@ def _safe_json_request(url, data=None, headers=None, form=False):
     if data is not None:
         raw = urllib.parse.urlencode(data).encode() if form else json.dumps(data).encode()
         request_headers['Content-Type'] = 'application/x-www-form-urlencoded' if form else 'application/json'
-    request = urllib.request.Request(url, data=raw, headers=request_headers)
+    request = urllib.request.Request(url, data=raw, headers=request_headers, method=method)
     try:
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
             body = response.read(1_000_001)
@@ -114,6 +116,16 @@ class BudgetLedger:
     def status(self):
         with self.lock:
             return {'reserved': dict(self.reserved), 'usdCeilingReserved': float(self.spent_ceiling)}
+
+    def require_capacity(self, requested):
+        """Validate a complete write-plus-readback allowance without spending it twice."""
+        with self.lock:
+            req = {key: self._count(requested.get(key, 0)) for key in self.COUNTS}
+            if self.approval is None or any(self.reserved[k] + req[k] > self.approval[k] for k in self.COUNTS):
+                raise StateError('Die Freigabe deckt Entfernung und Rückprüfung nicht vollständig ab.', 403)
+            cost = sum(req[k] * self.RATES[k] for k in self.COUNTS)
+            if self.spent_ceiling + cost > self.approval['usd']:
+                raise StateError('Die USD-Freigabe muss Entfernung und Rückprüfung gemeinsam abdecken.', 403)
 
 
 class XConnection:
@@ -221,7 +233,7 @@ class XConnection:
             ledger.account_id, ledger.session_id = self.account['id'], id(self.tokens)
             return ledger
 
-    def bookmarks_page(self, ledger, account_id, cursor=None, max_results=100, include_author=True):
+    def bookmarks_page(self, ledger, account_id, cursor=None, max_results=100, include_author=True, verification=False):
         if type(max_results) is not int or not 1 <= max_results <= 100:
             raise StateError('X-Lesezeichenseiten müssen 1 bis 100 Posts anfordern.', 400)
         if cursor is not None and (not isinstance(cursor, str) or not cursor or len(cursor) > 4096):
@@ -238,13 +250,81 @@ class XConnection:
             if self.catalog.data.get('accountId') not in (None, account_id):
                 raise StateError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.', 409)
             # Reserve worst-case posts and expanded user records before transport.
-            ledger.reserve({'posts': max_results, 'users': max_results if include_author else 0, 'pages': 1})
+            ledger.reserve({'verification_posts': max_results, 'posts': 0, 'users': 0, 'pages': 1} if verification else
+                           {'posts': max_results, 'users': max_results if include_author else 0, 'pages': 1})
             params = {'max_results': max_results,
-                      'post.fields': 'id,text,created_at,article,note_post,attachments,entities',
-                      'expansions': 'author_id' if include_author else '',
-                      'user.fields': 'id,username,protected' if include_author else ''}
+                      'post.fields': 'id' if verification else 'id,text,created_at,article,note_post,attachments,entities',
+                      'expansions': 'author_id' if include_author and not verification else '',
+                      'user.fields': 'id,username,protected' if include_author and not verification else ''}
             if cursor is not None:
                 params['pagination_token'] = cursor
             query = urllib.parse.urlencode({k: v for k, v in params.items() if v})
             url = API + '/2/users/' + account_id + '/bookmarks?' + query
             return _safe_json_request(url, headers={'Authorization': 'Bearer ' + self.tokens['access_token']})
+
+    def delete_bookmark(self, ledger, account_id, post_id):
+        with self.lock:
+            if (not isinstance(ledger, BudgetLedger) or ledger.account_id != account_id or ledger.session_id != id(self.tokens)
+                    or not self.tokens or not self.account or self.account['id'] != account_id
+                    or not isinstance(post_id, str) or not post_id.isascii() or not post_id.isdigit()):
+                raise StateError('X-Sitzung oder Konto hat sich geändert.', 409)
+            if (self.tokens['expires_at'] <= time.time() or self.catalog.data.get('accountId') != account_id
+                    or not account_id.isascii() or not account_id.isdigit() or len(post_id) > 19):
+                raise StateError('X-Sitzung abgelaufen oder gespeichertes Konto geändert.', 409)
+            if not set(SCOPES).issubset(self.tokens.get('scopes', [])):
+                raise StateError('Der X-Anmeldung fehlen erforderliche Berechtigungen.', 403)
+            ledger.reserve({'mutations': 1})
+            return _safe_json_request(API + '/2/users/' + account_id + '/bookmarks/' + post_id,
+                headers={'Authorization': 'Bearer ' + self.tokens['access_token']}, method='DELETE')
+
+    def membership(self, ledger):
+        """Bounded read-only coverage proof, using the SAME ledger as any preceding writes."""
+        account_id = ledger.account_id
+        seen, cursor, cursors = set(), None, set()
+        complete, reason = False, 'budget_exhausted'
+        while True:
+            with ledger.lock:
+                posts_left = ledger.approval['verification_posts'] - ledger.reserved['verification_posts']
+                pages_left = ledger.approval['pages'] - ledger.reserved['pages']
+                affordable = int((ledger.approval['usd'] - ledger.spent_ceiling) / ledger.RATES['verification_posts'])
+            size = min(100, posts_left, affordable)
+            if size < 1 or pages_left < 1:
+                break
+            try:
+                response = self.bookmarks_page(ledger, account_id, cursor, size, include_author=False, verification=True)
+            except StateError as exc:
+                reason = 'api_%s' % exc.status
+                break
+            if not isinstance(response, dict) or response.get('errors') or not isinstance(response.get('meta'), dict):
+                reason = 'partial_response'
+                break
+            meta = response['meta']
+            data = response.get('data', [] if meta.get('result_count') == 0 else None)
+            if (not isinstance(data, list) or len(data) > size
+                    or any(not isinstance(p, dict) or not isinstance(p.get('id'), str)
+                           or not p['id'].isascii() or not p['id'].isdigit() or len(p['id']) > 19 for p in data)
+                    or type(meta.get('result_count')) is not int or meta['result_count'] != len(data)):
+                reason = 'invalid_response'
+                break
+            ids = [p['id'] for p in data]
+            if len(set(ids)) != len(ids) or seen.intersection(ids):
+                reason = 'overlapping_pages'
+                break
+            seen.update(ids)
+            token = meta.get('next_token')
+            if token is None:
+                complete, reason = True, None
+                break
+            if not isinstance(token, str) or not token or token in cursors:
+                reason = 'invalid_cursor'
+                break
+            cursors.add(token)
+            cursor = token
+        with self.lock:
+            if (not self.tokens or self.tokens['expires_at'] <= time.time() or id(self.tokens) != ledger.session_id
+                    or (self.account or {}).get('id') != account_id or self.catalog.data.get('accountId') != account_id):
+                complete, reason = False, 'session_changed'
+        result = {'complete': complete, 'reason': reason, 'budget': ledger.status()}
+        if complete:
+            result['starredIds'] = sorted(seen)
+        return result

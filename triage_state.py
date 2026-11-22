@@ -178,6 +178,15 @@ class Store:
                                                  if i not in self.eligible_ids or self.is_native(i) or i in remaining})]
             self.save(candidate)
 
+    def mark_x_membership_unknown(self, account_id):
+        """Clear stale X membership knowledge while a fresh inventory is in flight."""
+        with self.lock:
+            if not isinstance(account_id, str) or not account_id or self.x_account_id != account_id:
+                raise StateError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.', 409)
+            candidate = self.view()
+            candidate['xRemote'] = {'accountId': account_id, 'checkedAt': now(), 'starredIds': None}
+            self.save(candidate)
+
     def apply_x_remote(self, account_id, starred_ids, checked_at):
         """Store account-scoped X membership without changing Inoreader state."""
         with self.lock:
