@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Leseliste · Inoreader aufräumen</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Zum Inhalt</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Themen und Verbindung">
+      <a class="brand" href="/" aria-label="Leseliste Startseite"><span class="brand-mark" aria-hidden="true">l.</span><span>leseliste<span class="brand-sub">Weniger sammeln. Mehr Raum.</span></span></a>
+      <div class="scope-label" id="scope-label">QUELLENAUSWAHL</div>
+      <div class="collection-switch" role="group" aria-labelledby="scope-label">
+        <button class="active" type="button" data-collection="all" aria-pressed="true">Alle Quellen</button>
+        <button type="button" data-collection="x" aria-pressed="false">Nur X</button>
+      </div>
+      <div class="topic-heading"><span>THEMENFILTER</span><span>Entschieden</span></div>
+      <button class="all-topics topic-button active" id="all-topics" type="button"><span>Alle Themen</span></button>
+      <nav id="topics" aria-label="Nach Thema filtern"></nav>
+      <p class="topic-note">Quellenauswahl und Themenfilter lassen sich kombinieren. „Alle Themen“ hebt nur den Themenfilter auf. Themen ohne Inhaltsabruf bleiben vorläufig.</p>
+      <section class="connection-card" aria-labelledby="connection-heading">
+        <div class="connection-title"><span class="connection-dot" id="connection-dot"></span><h2 id="connection-heading">Inoreader</h2></div>
+        <p id="connection-message">Verbindung wird geprüft …</p>
+        <button id="connect" class="button secondary full-width" type="button" disabled>Inoreader verbinden <span aria-hidden="true">↗</span></button>
+        <button id="refresh" class="text-button full-width" type="button" disabled>Live-Stand prüfen</button>
+      </section>
+    </aside>
+    <main id="main" tabindex="-1">
+      <header class="topbar"><span class="eyebrow">INOREADER / SPÄTER LESEN</span><span class="saved-status" id="saved-status">Lade gespeicherten Fortschritt …</span></header>
+      <section class="intro" aria-labelledby="page-title">
+        <div><div class="eyebrow accent">PLATZ FÜR DAS WESENTLICHE</div><h1 id="page-title">Deine Leseliste. Ein bisschen leichter.</h1><p>Was ist noch relevant? Entscheide in kleinen Runden.<br> Du bestimmst, was auf deiner Liste bleibt.</p></div>
+        <div class="progress-card"><div class="progress-card-top"><span>Dein Fortschritt</span><strong id="progress-percent">–</strong></div><div class="progress-track"><div id="overall-bar"></div></div><p id="overall-progress">Sammlung wird geladen …</p><div class="progress-legend"><span><i class="legend-dot keep-dot"></i><span id="keep-count">–</span> behalten</span><span><i class="legend-dot remove-dot"></i><span id="remove-count">–</span> vorgemerkt</span><span><i class="legend-dot done-dot"></i><span id="done-count">–</span> entfernt</span></div></div>
+      </section>
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <section class="collection" aria-labelledby="collection-title">
+        <div class="collection-heading"><div><h2 id="collection-title">Alle Themen</h2><p id="topic-progress">Die gespeicherte Sammlung</p></div><div class="heading-actions"><button id="undo" class="button secondary" disabled type="button"><span aria-hidden="true">↶</span> Rückgängig</button><button id="preview" class="button primary" disabled type="button">Entfernungen prüfen <span id="pending-count" class="button-count">0</span></button></div></div>
+        <div class="filters"><label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Artikel durchsuchen</span><input id="search" type="search" placeholder="Titel, Quelle oder Auszug suchen …" autocomplete="off"></label><label class="source-field"><span class="sr-only">Quelle filtern</span><select id="source"><option value="">Alle Quellen</option></select></label></div>
+        <div class="list-navigation"><div class="status-tabs" role="group" aria-label="Nach Entscheidung filtern"><button class="status-tab active" data-status="saved" type="button">Später lesen</button><button class="status-tab" data-status="open" type="button">Offen <span id="open-count">–</span></button><button class="status-tab" data-status="keep" type="button">Behalten</button><button class="status-tab" data-status="remove" type="button">Vorgemerkt</button><button class="status-tab" data-status="skip" type="button">Übersprungen</button><button class="status-tab" data-status="all" type="button">Alle inkl. entfernter</button></div><label class="round-size">Pro Runde <select id="page-size"><option value="10">10</option><option value="20">20</option><option value="500">Alle</option></select></label></div>
+        <div class="batch-bar"><label class="select-all"><input id="select-all" type="checkbox"><span id="selection-label">Runde auswählen</span></label><div id="batch-actions" class="batch-actions" hidden><button id="open-selected" type="button">Ausgewählte Originale öffnen ↗</button><button id="karakeep-selected" type="button" title="Speichert die ausgewählten Artikel und merkt nach bestätigtem Erfolg ihre Entfernung aus Inoreader vor">Ausgewählte in Karakeep speichern</button><button data-batch="keep" type="button">Behalten</button><button data-batch="remove" type="button">Entfernen vormerken</button><button data-batch="skip" type="button">Überspringen</button><button data-batch="clear" type="button">Zurücksetzen</button></div><span id="result-count" class="result-count"></span></div>
+        <div id="article-list" class="article-list" aria-label="Artikel"><div class="empty-state"><span class="empty-icon" aria-hidden="true">···</span><h3>Deine Sammlung wird geladen</h3><p>Einen Moment bitte.</p></div></div>
+        <footer class="list-footer"><p id="snapshot-label">Gespeicherter Ausgangsstand</p><div class="pagination"><button id="previous-page" class="button secondary" type="button" disabled aria-label="Vorherige Runde">←</button><span id="page-label">–</span><button id="next-page" class="button secondary" type="button" disabled aria-label="Nächste Runde">→</button></div></footer>
+      </section>
+      <p class="footnote">Entscheidungen werden lokal gespeichert. Erst nach deiner Bestätigung werden vorgemerkte Artikel aus „Später lesen“ entfernt.</p>
+    </main>
+  </div>
+  <dialog id="detail-dialog" class="detail-dialog" aria-labelledby="detail-title"><div class="drawer-inner"><div class="drawer-top"><span class="eyebrow" id="detail-ref"></span><button class="icon-button" id="close-detail" type="button" aria-label="Details schließen">×</button></div><div id="detail-meta" class="detail-meta"></div><h2 id="detail-title"></h2><div id="detail-status" class="detail-status"></div><a id="detail-link" class="button primary original-link" target="_blank" rel="noopener noreferrer">Original öffnen <span aria-hidden="true">↗</span></a><button id="detail-karakeep" class="button keep-button detail-karakeep" type="button">In Karakeep speichern</button><p class="karakeep-note">Speichert den Link und merkt ihn danach zum Entfernen aus Inoreader vor.</p><p id="detail-enrichment" class="detail-enrichment" hidden></p><p id="detail-missing" class="detail-warning" hidden>Der gespeicherte Inhalt reicht nicht aus, um diesen Artikel sicher einzuordnen. Öffne bei Bedarf das Original.</p><button id="detail-fetch-x" class="button secondary detail-fetch-x" type="button">X-Inhalt abrufen</button><details><summary>Quelltext / gespeicherten Auszug anzeigen</summary><p id="detail-excerpt" class="detail-excerpt"></p></details><p id="detail-duplicates" class="detail-warning" hidden></p><div class="drawer-decisions" id="detail-actions"><button class="button keep-button" data-detail="keep" type="button">✓ Behalten</button><button class="button remove-button" data-detail="remove" type="button">− Entfernen vormerken</button><button class="button secondary" data-detail="skip" type="button">Überspringen</button><button class="text-button" data-detail="clear" type="button">Entscheidung zurücksetzen</button></div><p class="drawer-note">„Entfernen“ betrifft nur die Liste „Später lesen“. Der Artikel wird nicht dauerhaft gelöscht.</p></div></dialog>
+  <dialog id="sync-dialog" class="sync-dialog" aria-labelledby="sync-title"><div class="sync-inner"><div class="drawer-top"><span class="eyebrow accent">DEINE BESTÄTIGUNG</span><button class="icon-button" id="close-sync" type="button" aria-label="Vorschau schließen">×</button></div><h2 id="sync-title">Aus „Später lesen“ entfernen</h2><p id="sync-description"></p><ul id="sync-items" class="sync-items"></ul><p class="sync-note">Diese Artikel werden in Inoreader aus „Später lesen“ entfernt, nicht dauerhaft gelöscht. „Behalten“ und „Überspringen“ verändern Inoreader nicht.</p><p id="sync-error" class="detail-warning" role="alert" hidden></p><div class="sync-actions"><button id="cancel-sync" class="button secondary" type="button">Abbrechen</button><button id="confirm-sync" class="button primary" type="button">Jetzt entfernen</button></div></div></dialog>
+  <dialog id="karakeep-dialog" class="sync-dialog" aria-labelledby="karakeep-title" aria-describedby="karakeep-description"><div class="sync-inner"><div class="drawer-top"><span class="eyebrow accent">KARAKEEP VERBINDEN</span><button id="close-karakeep" class="icon-button" type="button" aria-label="Karakeep-Verbindung schließen">×</button></div><h2 id="karakeep-title">Links sicher aufbewahren</h2><p id="karakeep-description">Verbinde deine Karakeep-Instanz <strong>karakeep.example.invalid</strong>. Der Schlüssel bleibt nur für diese laufende Sitzung im Speicher und wird nicht in einer Datei gespeichert.</p><p>Trage den Schlüssel selbst hier ein, nicht im Chat. Öffne <a href="https://karakeep.example.invalid/" target="_blank" rel="noopener noreferrer">Karakeep ↗</a> und dort „Settings“ → „API Keys“.</p><label class="karakeep-key-label" for="karakeep-key">Karakeep-API-Schlüssel</label><input id="karakeep-key" class="karakeep-key-input" type="password" autocomplete="off" spellcheck="false" autocapitalize="none" maxlength="8192"><p class="karakeep-note">Verbinden speichert noch keinen Artikel. Erst „In Karakeep speichern“ legt den Link ab und merkt nach bestätigtem Erfolg die Entfernung aus Inoreader vor.</p><p id="karakeep-error" class="detail-warning" role="alert" hidden></p><div class="sync-actions"><button id="confirm-karakeep" class="button primary" type="button">Karakeep verbinden</button></div></div></dialog>
+</body>
+</html>
