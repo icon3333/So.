@@ -82,17 +82,23 @@ function applyState(result) {
   if (!Array.isArray(result.articles) || !result.state) throw new Error('Der gespeicherte Stand konnte nicht gelesen werden.');
   if (data && result.state.version < data.state.version) return;
   data = { ...result, eligibleIds: Array.isArray(result.eligibleIds) ? result.eligibleIds : result.articles.map(a => a.id) };
-  remoteIds = Array.isArray(data.state.remote?.starredIds) ? new Set(data.state.remote.starredIds) : null;
+  remoteIds = Array.isArray(data.savedIds) ? new Set(data.savedIds) : (Array.isArray(data.state.remote?.starredIds) ? new Set(data.state.remote.starredIds) : null);
   const available = new Set(data.articles.filter((article) => !isRemoved(article)).map((article) => article.id));
   ui.selected = new Set([...ui.selected].filter((id) => available.has(id)));
   render();
 }
 
 function choice(article) { return data.state.decisions?.[article.id]?.choice || ''; }
-function isRemoved(article) { return remoteIds !== null && !remoteIds.has(article.id); }
+function isRemoved(article) {
+  if (article.origin === 'x' && !Array.isArray(data.savedIds)) {
+    const remote = data.state.xRemote;
+    return Boolean(remote && remote.accountId === article.originAccountId && Array.isArray(remote.starredIds) && !remote.starredIds.includes(article.postId));
+  }
+  return remoteIds !== null && !remoteIds.has(article.id);
+}
 function isDecided(article) { return isRemoved(article) || ['keep', 'remove'].includes(choice(article)); }
 function topic(article) { return enrichment(article)?.topic || article.topic || 'Ohne Thema'; }
-function source(article) { return article.source || article.domain || 'Quelle unbekannt'; }
+function source(article) { return article.source || article.domain || article.publisher?.title || (article.origin === 'x' ? 'X' : 'Quelle unbekannt'); }
 function savedToKarakeep(article) { return Boolean(data.state.karakeepSaved?.[article.id]); }
 function karakeepLabel(article) {
   if (!savedToKarakeep(article)) return 'In Karakeep speichern';
@@ -114,10 +120,11 @@ function isXArticle(article) {
   try { return ['x.com', 'www.x.com'].includes(new URL(article.url).hostname); }
   catch { return false; }
 }
-function eligible(article) { return ui.collection !== 'x' || isXArticle(article); }
-function enrichment(article) { return data.xContent?.entries?.[article.id] || null; }
+function origin(article) { return article.origin === 'x' ? 'x' : 'inoreader'; }
+function eligible(article) { return ui.collection === 'all' || origin(article) === ui.collection; }
+function enrichment(article) { return data.xContent?.entries?.[article.id] || (article.origin === 'x' && article.summary ? article : null); }
 function displayTitle(article) { return enrichment(article)?.title || article.title || 'Ohne Titel'; }
-function displayText(article) { const e = enrichment(article); return [e?.summary, e?.text, article.excerpt].filter(Boolean).join(' '); }
+function displayText(article) { const e = enrichment(article); return [e?.summary, e?.text, article.text, article.excerpt, article.author].filter(Boolean).join(' '); }
 function scopedArticles() {
   const query = ui.search.toLocaleLowerCase('de');
   return data.articles.filter((a) => eligible(a) && (!ui.topic || topic(a) === ui.topic) && (!ui.source || source(a) === ui.source) && (!query || [displayTitle(a), displayText(a), a.url, a.ref, source(a), topic(a)].join(' ').toLocaleLowerCase('de').includes(query)));
@@ -139,6 +146,65 @@ function visibleArticles() {
 }
 
 function resetView() { ui.page = 0; ui.selected.clear(); render(); }
+
+function setCollection(collection) {
+  ui.collection = collection;
+  ui.topic = ''; ui.source = ''; ui.search = ''; ui.status = 'saved';
+  $('#search').value = '';
+  resetView();
+}
+
+function xImportParameters() {
+  const posts = Number($('#x-import-posts').value);
+  const users = Number($('#x-import-users').value);
+  const pages = Number($('#x-import-pages').value);
+  if (!Number.isInteger(posts) || posts < 1 || posts > 1000 || !Number.isInteger(users) || users < 0 || users > posts || !Number.isInteger(pages) || pages < 1 || pages > 1000) {
+    throw new Error('Bitte gültige Obergrenzen eingeben: 1–1000 Beiträge/Seiten und höchstens ebenso viele Autor:innen.');
+  }
+  if (data.xImport?.restartRequired && !$('#x-import-restart').checked) throw new Error('Dieser Import braucht einen ausdrücklich bestätigten Neustart.');
+  return { posts, users, pages, usd: (posts * 5 + users * 10) / 1000,
+    verification_posts: 0, mutations: 0, maxPages: pages, maxResults: Math.min(posts, 100),
+    restart: Boolean($('#x-import-restart').checked) };
+}
+
+function updateXImportQuote() {
+  $('#x-import-approval').checked = false;
+  $('#confirm-x-import').disabled = true;
+  try {
+    const params = xImportParameters();
+    $('#x-import-quote').textContent = `Höchstens ${params.posts} Posts + ${params.users} Autor:innen, bis zu ${params.pages} Seiten · reservierter Kostenrahmen ${params.usd.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 3 })} USD. Reguläre Tarife, keine Deduplizierungsrabatte angenommen.`;
+  } catch (error) { $('#x-import-quote').textContent = error.message; }
+}
+
+function openXImport() {
+  if (ui.busy || !data.xConnection?.connected) return;
+  const prior = data.xImport;
+  $('#x-import-description').textContent = prior?.restartRequired
+    ? 'Der Cursor ist nicht mehr verwendbar. Starte eine neue Inventur nur mit erneuter Kostenfreigabe. Gesicherte Einträge und Entscheidungen bleiben erhalten.'
+    : prior?.scanStarted ? 'Setzt die gespeicherte Teilinventur fort. Bereits bekannte Beiträge können erneut berechnet werden.'
+    : 'Startet eine neue Inventur. Doppelte Beiträge können erneut berechnet werden; bestehende Entscheidungen bleiben erhalten.';
+  $('#x-import-restart-label').hidden = !prior?.restartRequired;
+  $('#x-import-restart').checked = false;
+  updateXImportQuote();
+  $('#x-import-dialog').showModal();
+}
+
+async function confirmXImport() {
+  if (ui.busy || !data.xConnection?.connected || !$('#x-import-approval').checked) {
+    notice('Bitte den angezeigten Kostenrahmen ausdrücklich bestätigen; X muss verbunden sein.', true);
+    return;
+  }
+  let params;
+  try { params = xImportParameters(); }
+  catch (error) { notice(error.message, true); return; }
+  $('#confirm-x-import').disabled = true;
+  const result = await perform(() => request('/api/x/import', params));
+  $('#confirm-x-import').disabled = !$('#x-import-approval').checked;
+  if (result) {
+    $('#x-import-dialog').close();
+    notice(result.xImport?.complete ? 'X-Inventur abgeschlossen. Vorhandene Entscheidungen bleiben erhalten.' : 'Teilimport gesichert. Du kannst nach neuer Kostenfreigabe fortsetzen; fehlende Einträge gelten nicht als entfernt.');
+  }
+}
 
 function renderTopics() {
   const groups = new Map();
@@ -279,7 +345,7 @@ function render() {
   $('#saved-status').textContent = ui.busy ? 'Wird verarbeitet …' : '✓ Fortschritt lokal gespeichert';
   renderTopics();
   renderSourceOptions();
-  $('#collection-title').textContent = ui.topic || (ui.collection === 'x' ? 'Beiträge von X' : 'Alle Beiträge');
+  $('#collection-title').textContent = ui.topic || (ui.collection === 'x' ? 'X-Lesezeichen' : ui.collection === 'inoreader' ? 'Inoreader-Leseliste' : 'Alle Beiträge');
   const group = stats(data.articles.filter((a) => eligible(a) && (!ui.topic || topic(a) === ui.topic)));
   $('#topic-progress').textContent = `${group.decided} von ${group.total} entschieden · ${group.open} offen${ui.topic ? ' in diesem Thema' : ' in deiner Sammlung'}`;
   $('#open-count').textContent = stats(scopedArticles()).open;
@@ -303,7 +369,7 @@ function render() {
   $('#next-page').disabled = ui.page + 1 >= pages || ui.busy;
   $('#undo').disabled = ui.busy || !data.state.history?.length;
   $('#preview').disabled = ui.busy || !overall.remove;
-  $('#snapshot-label').textContent = `${ui.collection === 'x' ? 'X-Übersicht' : 'Gesamte Leseliste'}: ${data.articles.filter(eligible).length} Artikel im Ausgangsstand · ${formatDate(data.fetchedAt)}${data.state.remote?.checkedAt ? ` | Zuletzt geprüft: ${formatDate(data.state.remote.checkedAt, true)}` : ' | Live-Stand noch ungeprüft'}`;
+  $('#snapshot-label').textContent = `${data.articles.filter(eligible).length} Einträge in dieser Herkunftsansicht · Inoreader-Ausgangsstand: ${formatDate(data.fetchedAt)}${data.state.xRemote?.checkedAt ? ` · X-Inventur: ${formatDate(data.state.xRemote.checkedAt, true)}` : ' · X-Live-Stand ungeprüft'}`;
   $$('[data-collection]').forEach(button => {
     button.classList.toggle('active', button.dataset.collection === ui.collection);
     button.setAttribute('aria-pressed', String(button.dataset.collection === ui.collection));
@@ -323,6 +389,11 @@ function render() {
   $('#x-connection-dot').classList.toggle('connected', Boolean(xConnection.connected));
   $('#x-connect').hidden = Boolean(xConnection.connected);
   $('#x-disconnect').hidden = !xConnection.connected;
+  $('#x-import').disabled = ui.busy || !xConnection.connected;
+  $('#x-import').title = xConnection.connected ? 'Import mit eigener Kostenfreigabe starten' : 'Zuerst X unter „Verbindungen“ anmelden';
+  const imported = data.xImport;
+  $('#x-import-status').textContent = !imported?.count && !imported?.scanStarted ? 'Noch keine X-Lesezeichen importiert.' : `${imported?.count || 0} lokal gespeichert · ${imported?.complete ? 'API-Inventur vollständig' : imported?.restartRequired ? 'Teilimport · expliziter Neustart nötig' : 'Teilimport · Fortsetzung möglich'}`;
+  $('#x-import').textContent = imported?.restartRequired ? 'X-Import neu starten' : imported?.scanStarted ? 'X-Import fortsetzen' : 'X-Lesezeichen importieren';
   $('#x-connect').disabled = ui.busy;
   $('#x-disconnect').disabled = ui.busy;
   renderSelection();
@@ -457,7 +528,7 @@ function renderDetails() {
   if (!article) { $('#detail-dialog').close(); return; }
   $('#detail-ref').textContent = `ARTIKEL ${article.ref || ''}`;
   $('#detail-title').textContent = displayTitle(article);
-  $('#detail-meta').textContent = `${source(article)} · ${formatDate(article.published)} · ${topic(article)}`;
+  $('#detail-meta').textContent = `${origin(article) === 'x' ? 'X-Lesezeichen' : 'Inoreader'} · ${source(article)} · ${article.author || 'Autor nicht mitgeliefert'} · ${formatDate(article.published || article.createdAt)} · ${topic(article)}`;
   $('#detail-status').textContent = decisionLabel(article);
   $('#detail-karakeep').textContent = karakeepLabel(article);
   $('#detail-karakeep').disabled = karakeepDisabled(article);
@@ -465,15 +536,14 @@ function renderDetails() {
   $('#detail-link').hidden = !url;
   if (url) $('#detail-link').href = url; else $('#detail-link').removeAttribute('href');
   const content = enrichment(article);
-  $('#detail-excerpt').textContent = isXArticle(article) && content
-    ? content.text?.trim() || 'Kein lesbarer Quelltext abrufbar; eventuell wurde nur ein Bild ausgewertet.'
-    : article.excerpt?.trim() || 'Für diesen Artikel ist kein lesbarer Auszug vorhanden.';
-  $('#detail-missing').hidden = !isXArticle(article) || content?.status === 'read';
-  $('#detail-missing').textContent = content ? `X-Inhalt: ${content.status === 'partial' ? 'Teilweise lesbar – Einschränkungen stehen unten.' : content.status === 'unavailable' ? 'Nicht verfügbar. Erneut abrufen ist möglich.' : 'Angereichert.'}` : 'Noch nicht abgerufen. „X-Inhalt abrufen“ lädt nur den Rohtext und erfindet keine Zusammenfassung.';
+  const native = origin(article) === 'x';
+  $('#detail-excerpt').textContent = content?.text?.trim() || article.text?.trim() || article.excerpt?.trim() || (native ? 'Kein lesbarer Rohtext mitgeliefert; Auswertung fehlt.' : 'Für diesen Artikel ist kein lesbarer Auszug vorhanden.');
+  $('#detail-missing').hidden = native ? Boolean(content?.summary) : (!isXArticle(article) || content?.status === 'read');
+  $('#detail-missing').textContent = native ? (content?.summary ? 'Zusammenfassung vorhanden; Rohtext und Einschränkungen siehe unten.' : 'Rohtext; Auswertung fehlt. Es wird keine Zusammenfassung erfunden.') : (content ? `X-Inhalt: ${content.status === 'partial' ? 'Teilweise lesbar – Einschränkungen stehen unten.' : content.status === 'unavailable' ? 'Nicht verfügbar. Erneut abrufen ist möglich.' : 'Angereichert.'}` : 'Noch nicht abgerufen. „X-Inhalt abrufen“ lädt nur den Rohtext und erfindet keine Zusammenfassung.');
   const fetchButton = $('#detail-fetch-x');
-  fetchButton.hidden = !isXArticle(article) || content?.status === 'read' || content?.status === 'partial';
+  fetchButton.hidden = native || !isXArticle(article) || content?.status === 'read' || content?.status === 'partial';
   fetchButton.disabled = ui.busy;
-  const fields = enrichment(article);
+  const fields = enrichment(article) || (native ? article : null);
   const parts = [];
   if (fields) {
     if (fields.title) parts.push(`Titel: ${fields.title}`);
@@ -483,6 +553,10 @@ function renderDetails() {
     if (fields.takeaway) parts.push(`Takeaway (Redaktion): ${fields.takeaway}`);
     if (fields.assessment) parts.push(`Einschätzung (Redaktion): ${fields.assessment}`);
     if (Array.isArray(fields.limitations) && fields.limitations.length) parts.push(`Grenzen: ${fields.limitations.join('; ')}`);
+  }
+  if (native) {
+    parts.push(`Sichtbarkeit: ${article.visibility === 'public' ? 'öffentlich bestätigt' : article.visibility === 'protected' ? 'geschützt; keine öffentliche Nachladung' : 'ungeklärt; keine öffentliche Nachladung'}`);
+    if (fields !== article && Array.isArray(article.limitations)) parts.push(`Abrufgrenzen: ${article.limitations.join('; ')}`);
   }
   $('#detail-enrichment').hidden = !parts.length;
   $('#detail-enrichment').textContent = parts.join('\n');
@@ -579,12 +653,7 @@ async function connect() {
 }
 
 $('#all-topics').addEventListener('click', () => { ui.topic = ''; resetView(); });
-$$('[data-collection]').forEach(button => button.addEventListener('click', () => {
-  ui.collection = button.dataset.collection;
-  ui.topic = ''; ui.source = ''; ui.search = ''; ui.status = 'saved';
-  $('#search').value = '';
-  resetView();
-}));
+$$('[data-collection]').forEach(button => button.addEventListener('click', () => setCollection(button.dataset.collection)));
 $('#search').addEventListener('input', (event) => { ui.search = event.target.value.trim(); if (data) resetView(); });
 $('#source').addEventListener('change', (event) => { ui.source = event.target.value; resetView(); });
 $('#page-size').addEventListener('change', (event) => { ui.pageSize = Number(event.target.value); resetView(); });
@@ -629,6 +698,15 @@ $('#x-connect').addEventListener('click', async () => {
   } catch (error) { notice(error.message, true); }
   finally { ui.busy = false; render(); }
 });
+$('#x-import').addEventListener('click', openXImport);
+$('#confirm-x-import').addEventListener('click', confirmXImport);
+for (const id of ['x-import-posts', 'x-import-users', 'x-import-pages', 'x-import-restart']) $(`#${id}`).addEventListener('input', updateXImportQuote);
+$('#x-import-approval').addEventListener('change', () => {
+  try { xImportParameters(); $('#confirm-x-import').disabled = ui.busy || !$('#x-import-approval').checked; }
+  catch { $('#confirm-x-import').disabled = true; }
+});
+for (const id of ['close-x-import','cancel-x-import']) $(`#${id}`).addEventListener('click', () => { if (!ui.busy) $('#x-import-dialog').close(); });
+$('#x-import-dialog').addEventListener('cancel', (event) => { if (ui.busy) event.preventDefault(); });
 $('#x-disconnect').addEventListener('click', () => perform(() => request('/api/x/disconnect', {}), 'X-Verbindung getrennt.'));
 $('#karakeep-selected').addEventListener('click', saveSelectedToKarakeep);
 $('#detail-karakeep').addEventListener('click', () => saveToKarakeep(ui.detailId));
