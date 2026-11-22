@@ -9,6 +9,19 @@ class StateTests(unittest.TestCase):
         self.articles = [{'id': 'a', 'title': 'A'}, {'id': 'b', 'title': 'B'}]
         self.s = Store(self.path, self.articles)
     def tearDown(self): self.temp.cleanup()
+    def test_new_membership_evidence_invalidates_prior_inventory_snapshots(self):
+        self.s.record_source_inventory('inoreader', 7, 'complete', 'old')
+        self.s.apply_remote(['a'], 'new')
+        self.assertEqual(self.s.source_inventory('inoreader'), {
+            'count': 7, 'checkedAt': 'old', 'coverage': 'complete', 'state': 'stale'})
+        scoped = Store(self.path, self.articles, x_account_id='acct')
+        scoped.record_source_inventory('x', 9, 'partial', 'old-x')
+        scoped.mark_x_membership_unknown('acct')
+        self.assertEqual(scoped.source_inventory('x')['state'], 'stale')
+        scoped.record_source_inventory('x', 9, 'partial', 'old-x')
+        scoped.apply_x_remote('acct', ['1'], 'new-x')
+        self.assertEqual(scoped.source_inventory('x')['state'], 'stale')
+
     def test_decisions_persist_and_undo_batch(self):
         self.s.decide(0, ['a','b'], 'remove')
         again = Store(self.path, self.articles)

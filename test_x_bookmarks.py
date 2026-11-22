@@ -78,6 +78,12 @@ class XBookmarkCatalogTests(unittest.TestCase):
         self.assertEqual(catalog.path.read_bytes(), old_bytes)
         self.assertEqual(catalog.data['checkpoint'], 'old-cursor')
 
+    def test_restart_without_a_source_response_has_no_successful_check_time(self):
+        catalog = XBookmarkCatalog(self.root / 'x-bookmarks.json')
+        catalog.merge_page('acct-1', [], None, complete=True, seen_ids=['1'])
+        catalog.merge_page('acct-1', [], None, begin=True, partial=True)
+        self.assertIsNone(catalog.source_inventory()['checkedAt'])
+
     def test_partial_inventory_has_its_own_check_time_after_restart(self):
         catalog = XBookmarkCatalog(self.root / 'x-bookmarks.json')
         with patch('x_bookmarks.now', return_value='first-check'):

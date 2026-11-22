@@ -116,7 +116,7 @@ class XBookmarkCatalog:
                 raise ValueError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.')
             candidate['accountId'] = account_id
             if begin:
-                candidate.update(inventorySeen=[], scanStarted=True, partial=False, restartRequired=False, cursorHistory=[])
+                candidate.update(inventorySeen=[], inventoryCheckedAt=None, scanStarted=True, partial=False, restartRequired=False, cursorHistory=[])
             for entry in entries:
                 post_id = entry.get('postId')
                 if not isinstance(post_id, str) or not post_id:
@@ -137,7 +137,8 @@ class XBookmarkCatalog:
             candidate['checkpoint'] = next_cursor
             candidate['inventorySeen'] = list(dict.fromkeys(candidate['inventorySeen'] + seen_ids))
             candidate['complete'] = complete
-            candidate['inventoryCheckedAt'] = now()
+            if complete or seen_ids:
+                candidate['inventoryCheckedAt'] = now()
             candidate['scanStarted'] = not complete
             candidate['partial'] = not complete
             candidate['restartRequired'] = False if complete else restart_required

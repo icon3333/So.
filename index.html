@@ -41,6 +41,7 @@
         <button id="connect" class="button secondary full-width" type="button" disabled>Inoreader verbinden <span aria-hidden="true">↗</span></button>
         <button id="refresh" class="text-button full-width" type="button" disabled>Live-Stand prüfen</button>
       </section>
+
       <section class="connection-card" aria-labelledby="x-connection-heading">
         <div class="connection-title"><span class="connection-dot" id="x-connection-dot"></span><h2 id="x-connection-heading">X-Lesezeichen</h2></div>
         <p id="x-connection-message" aria-live="polite">Verbindung wird geprüft …</p>
@@ -57,6 +58,13 @@
       <section class="intro" aria-labelledby="page-title">
         <div><div class="eyebrow accent">PLATZ FÜR DAS WESENTLICHE</div><h1 id="page-title">Deine Leseliste. Ein bisschen leichter.</h1><p>Was ist noch relevant? Entscheide in kleinen Runden.<br> Du bestimmst, was auf deiner Liste bleibt.</p></div>
         <div class="progress-card"><div class="progress-card-top"><span>Dein Fortschritt</span><strong id="progress-percent">–</strong></div><div class="progress-track"><div id="overall-bar"></div></div><p id="overall-progress">Sammlung wird geladen …</p><div class="progress-legend"><span><i class="legend-dot keep-dot"></i><span id="keep-count">–</span> behalten</span><span><i class="legend-dot remove-dot"></i><span id="remove-count">–</span> vorgemerkt</span><span><i class="legend-dot done-dot"></i><span id="done-count">–</span> entfernt</span></div></div>
+      </section>
+      <section class="source-inventory" aria-labelledby="source-inventory-heading">
+        <div class="source-inventory-heading"><div><span class="eyebrow accent">DEINE ORIGINALQUELLEN</span><h2 id="source-inventory-heading">Gespeichert in</h2></div><span class="source-inventory-note">Unabhängig von Filtern und lokaler Triage</span></div>
+        <div class="source-inventory-grid">
+          <article class="source-inventory-card" aria-labelledby="source-inventory-x-title"><div class="source-inventory-card-top"><h3 id="source-inventory-x-title">X-Lesezeichen</h3><a href="https://x.com/i/bookmarks" target="_blank" rel="noopener noreferrer">In X öffnen ↗</a></div><div class="source-inventory-count" id="source-inventory-x-count">–</div><p id="source-inventory-x-status" aria-live="polite">Noch nicht geprüft</p><p id="source-inventory-x-time">Erfolgreiche Prüfung: unbekannt</p><p class="source-inventory-limit">API-Scan-Snapshot, kein Live-Check. Auch ein vollständiger API-Scan belegt keine vollständige historische Abdeckung.</p><button id="source-inventory-x-check" class="button secondary" type="button" aria-label="X-Lesezeichen: letzten API-Scan übernehmen">Letzten API-Scan übernehmen</button></article>
+          <article class="source-inventory-card" aria-labelledby="source-inventory-inoreader-title"><div class="source-inventory-card-top"><h3 id="source-inventory-inoreader-title">Inoreader „Später lesen“</h3><a href="https://www.inoreader.com/read-later" target="_blank" rel="noopener noreferrer">In Inoreader öffnen ↗</a></div><div class="source-inventory-count" id="source-inventory-inoreader-count">–</div><p id="source-inventory-inoreader-status" aria-live="polite">Noch nicht geprüft</p><p id="source-inventory-inoreader-time">Erfolgreiche Prüfung: unbekannt</p><button id="source-inventory-inoreader-check" class="button secondary" type="button" aria-label="Inoreader Später lesen: jetzt prüfen" disabled>Jetzt prüfen</button></article>
+        </div>
       </section>
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
       <section class="collection" aria-labelledby="collection-title">

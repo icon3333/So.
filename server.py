@@ -98,6 +98,11 @@ class App:
                     if snapshot.get('checkedAt') is None:
                         raise StateError('X inventory requires an existing authorized bookmark scan.', 409)
                 self.store.record_source_inventory(source, snapshot['count'], snapshot['coverage'], snapshot['checkedAt'])
+                if source == 'x':
+                    remote = self.store.view().get('xRemote', {})
+                    known_ids = remote.get('starredIds')
+                    if isinstance(known_ids, list) and len(set(known_ids)) != snapshot['count']:
+                        self.store.fail_source_inventory(source)
             except (StateError, OSError):
                 self.store.fail_source_inventory(source)
                 raise

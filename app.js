@@ -225,6 +225,37 @@ async function confirmXImport() {
   }
 }
 
+function renderSourceInventory() {
+  const inventory = data.sourceInventory || {};
+  for (const source of ['x', 'inoreader']) {
+    const item = inventory[source] || {count:null, checkedAt:null, coverage:'unknown', state:'unknown'};
+    const count = $(`#source-inventory-${source}-count`);
+    const status = $(`#source-inventory-${source}-status`);
+    const time = $(`#source-inventory-${source}-time`);
+    count.textContent = Number.isSafeInteger(item.count) && item.count >= 0 ? String(item.count) : '–';
+    const labels = {complete:'API-Inventar vollständig',partial:'Unvollständig · nur erfasste Einträge',stale:'Veraltet · letzter erfolgreicher Stand',unknown:'Unbekannt · noch nicht erfolgreich geprüft'};
+    status.textContent = item.state === 'stale'
+      ? `${labels.stale} · ${item.coverage === 'partial' ? 'Unvollständige Abdeckung' : item.coverage === 'complete' ? 'API-Inventar vollständig' : 'Abdeckung unbekannt'} · ${item.checkedAt ? formatDate(item.checkedAt, true) : 'Zeit unbekannt'}`
+      : labels[item.state] || labels.unknown;
+    time.textContent = item.checkedAt ? `Letzter erfolgreicher Stand: ${formatDate(item.checkedAt, true)}` : 'Erfolgreiche Prüfung: unbekannt';
+    const button = $(`#source-inventory-${source}-check`);
+    button.disabled = ui.busy || (source === 'inoreader' && !data.connection?.connected);
+  }
+}
+
+async function checkSourceInventory(source) {
+  if (ui.busy || !['inoreader', 'x'].includes(source)) return;
+  if (source === 'inoreader' && !data.connection?.connected) return;
+
+  await perform(async () => {
+    try { return await request('/api/source-inventory/check', {source}); }
+    catch (error) {
+      try { applyState(await request('/api/state')); } catch { /* keep the last rendered snapshot */ }
+      throw error;
+    }
+  });
+}
+
 function renderTopics() {
   const groups = new Map();
   for (const article of data.articles.filter(eligible)) {
@@ -403,6 +434,7 @@ function render() {
   const xCount = $('#collection-x-count');
   if (xCount) xCount.textContent = data.articles.filter(isXArticle).length;
   const connection = data.connection || {};
+  renderSourceInventory();
   $('#connection-message').textContent = connection.message || (connection.connected ? 'Verbunden. Du kannst den aktuellen Stand prüfen.' : 'Deine Entscheidungen bleiben bis zur Bestätigung lokal.');
   $('#connection-dot').classList.toggle('connected', Boolean(connection.connected));
   $('#connect').hidden = Boolean(connection.connected);
@@ -744,6 +776,8 @@ $('#previous-page').addEventListener('click', () => { ui.page -= 1; ui.selected.
 $('#next-page').addEventListener('click', () => { ui.page += 1; ui.selected.clear(); render(); });
 $('#undo').addEventListener('click', () => perform(() => request('/api/undo', { version: data.state.version }), 'Die letzte lokale Entscheidung wurde rückgängig gemacht. Bereits bestätigte Entfernungen in Inoreader werden nicht wiederhergestellt.'));
 $('#refresh').addEventListener('click', () => perform(() => request('/api/refresh', {}), 'Der aktuelle Stand von „Später lesen“ wurde geprüft.'));
+$('#source-inventory-inoreader-check').addEventListener('click', () => checkSourceInventory('inoreader'));
+$('#source-inventory-x-check').addEventListener('click', () => checkSourceInventory('x'));
 $('#open-selected').addEventListener('click', () => {
   const urls = [...new Set(data.articles.filter((a) => ui.selected.has(a.id)).map((a) => safeUrl(a.url)).filter(Boolean))];
   let opened = 0;

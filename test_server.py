@@ -83,6 +83,50 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(saved['entries']['a']['status'], 'partial')
         self.assertEqual(saved['entries']['a']['text'], 'raw')
 
+    def test_explicit_inventory_checks_keep_last_success_on_failure(self):
+        connection = Mock()
+        connection.status.return_value = {'connected': True}
+        self.app.connection = connection
+        connection.read_later_inventory.return_value = {
+            'count': 41, 'coverage': 'complete', 'checkedAt': 'source-check'}
+        result = self.app.check_source_inventory('inoreader')
+        self.assertEqual(result['sourceInventory']['inoreader']['count'], 41)
+        self.assertIsNone(result['sourceInventory']['x']['count'])
+        before = self.app.store.view()
+        self.app.payload()
+        self.assertEqual(self.app.store.view(), before)
+        connection.read_later_inventory.side_effect = StateError('offline', 502)
+        with self.assertRaises(StateError):
+            self.app.check_source_inventory('inoreader')
+        self.assertEqual(self.app.payload()['sourceInventory']['inoreader'], {
+            'count': 41, 'checkedAt': 'source-check', 'coverage': 'complete', 'state': 'stale'})
+        self.assertEqual(set(self.app.store.view()['decisions']), {'a', 'b'})
+
+    def test_inventory_first_failure_is_unknown_and_invalid_source_does_not_call_connection(self):
+        connection = Mock()
+        connection.status.return_value = {'connected': True}
+        self.app.connection = connection
+        connection.read_later_inventory.side_effect = StateError('offline', 502)
+        with self.assertRaises(StateError):
+            self.app.check_source_inventory('inoreader')
+        self.assertEqual(self.app.payload()['sourceInventory']['inoreader'], {
+            'count': None, 'checkedAt': None, 'coverage': 'unknown', 'state': 'unknown'})
+        connection.read_later_inventory.reset_mock()
+        with self.assertRaises(StateError):
+            self.app.check_source_inventory('other')
+        connection.read_later_inventory.assert_not_called()
+
+    def test_adopting_an_old_x_scan_cannot_clear_known_membership_changes(self):
+        self.app.store.x_account_id = 'acct'
+        self.app.store.apply_x_remote('acct', ['2'], 'newer-check')
+        self.app.x_bookmarks = Mock()
+        self.app.x_bookmarks.source_inventory.return_value = {
+            'count': 2, 'coverage': 'complete', 'checkedAt': 'old-check'}
+        self.app.x_bookmarks.status.return_value = {}
+        snapshot = self.app.check_source_inventory('x')['sourceInventory']['x']
+        self.assertEqual(snapshot['count'], 2)
+        self.assertEqual(snapshot['state'], 'stale')
+
     def test_payload_source_inventory_is_independent_from_local_catalog_and_triage(self):
         self.app.store.record_source_inventory('x', 2, 'partial', 'x-check')
         self.app.x_bookmarks = Mock()

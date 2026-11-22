@@ -206,6 +206,8 @@ class Store:
                 raise StateError('Der Inoreader-Stand konnte nicht vollständig geprüft werden.', 502)
             candidate = self.view()
             candidate['remote'] = {'checkedAt': checked_at, 'starredIds': sorted(set(starred_ids))}
+            if 'inoreader' in candidate.get('sourceInventory', {}):
+                candidate['sourceInventory']['inoreader']['failed'] = True
             # Keep local undo for unaffected articles, never for confirmed remote removals.
             remaining = set(starred_ids)
             candidate['history'] = [kept for entry in candidate['history']
@@ -220,6 +222,8 @@ class Store:
                 raise StateError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.', 409)
             candidate = self.view()
             candidate['xRemote'] = {'accountId': account_id, 'checkedAt': now(), 'starredIds': None}
+            if 'x' in candidate.get('sourceInventory', {}):
+                candidate['sourceInventory']['x']['failed'] = True
             self.save(candidate)
 
     def apply_x_remote(self, account_id, starred_ids, checked_at):
@@ -234,6 +238,8 @@ class Store:
             candidate = self.view()
             candidate['xRemote'] = {'accountId': account_id, 'checkedAt': checked_at,
                                     'starredIds': sorted(set(starred_ids))}
+            if 'x' in candidate.get('sourceInventory', {}):
+                candidate['sourceInventory']['x']['failed'] = True
             remaining = set(starred_ids)
             candidate['history'] = [kept for entry in candidate['history']
                                     if (kept := {i: previous for i, previous in entry.items()
