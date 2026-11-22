@@ -157,7 +157,7 @@ function visibleArticles() {
   return articles.slice(ui.page * ui.pageSize, (ui.page + 1) * ui.pageSize);
 }
 
-function resetView() { ui.page = 0; ui.selected.clear(); render(); }
+function resetView() { ui.page = 0; ui.selected.clear(); ui.selectionScope = 'round'; render(); }
 
 function setCollection(collection) {
   ui.collection = collection;
@@ -371,13 +371,20 @@ function renderArticle(article) {
 function renderSelection() {
   const available = visibleArticles().filter((a) => !isRemoved(a));
   const count = available.filter((a) => ui.selected.has(a.id)).length;
+  const filteredAvailable = filteredArticles().filter((a) => !isRemoved(a));
+  const filteredCount = filteredAvailable.filter((a) => ui.selected.has(a.id)).length;
   $('#select-all').checked = available.length > 0 && count === available.length;
   $('#select-all').indeterminate = count > 0 && count < available.length;
   $('#select-all').disabled = ui.busy || !available.length;
-  $('#selection-label').textContent = ui.selected.size ? `${ui.selected.size} ausgewählt` : 'Runde auswählen';
+  const allFilteredSelected = filteredAvailable.length > 0 && filteredCount === filteredAvailable.length;
+  $('#select-filtered').textContent = allFilteredSelected ? 'Gefilterte Auswahl aufheben' : 'Alle gefilterten auswählen';
+  $('#select-filtered').disabled = ui.busy || !filteredAvailable.length;
+  $('#selection-label').textContent = ui.selectionScope === 'filtered' && filteredCount ? `${filteredCount} gefiltert ausgewählt` : ui.selected.size ? `${ui.selected.size} ausgewählt` : 'Runde auswählen';
   $('#batch-actions').hidden = !ui.selected.size;
   $$('[data-batch]').forEach((button) => { button.disabled = ui.busy; });
-  $('#open-selected').disabled = ui.busy;
+  $('#open-selected').disabled = ui.busy || !ui.selected.size;
+  $('#share-selected').disabled = ui.busy || !ui.selected.size;
+  $('#hermes-note').disabled = ui.busy || !ui.selected.size;
   $('#karakeep-selected').disabled = !data.articles.some((a) => ui.selected.has(a.id) && !karakeepDisabled(a));
   $('#karakeep-selected').title = 'Speichert die ausgewählten Links und merkt ihre Entfernung aus der jeweiligen Herkunft vor.';
 }
@@ -529,6 +536,42 @@ async function saveSelectedToKarakeep() {
     return data;
   });
   notice(`${saved} von ${articles.length} Artikeln in Karakeep gespeichert und zum Entfernen vorgemerkt. ${failure ? `Angehalten: ${failure} Die übrigen Artikel bleiben ausgewählt; es wurde nichts automatisch erneut gesendet.` : 'Die Entfernung aus Inoreader bestätigst du separat über „Entfernungen prüfen“.'}`, Boolean(failure));
+}
+
+function buildHermesHandoff() {
+  const selected = data.articles.filter((article) => ui.selected.has(article.id));
+  const note = $('#hermes-note').value.trim();
+  const lines = ['Leseliste — ausgewählte Artikel zur Prüfung (manuell geteilt; nicht automatisch gesendet)', ''];
+  if (note) lines.push(`Notiz: ${note}`, '');
+  for (const article of selected) {
+    lines.push(`- ${displayTitle(article)}`, `  Quelle: ${source(article)} · Herkunft: ${origin(article) === 'x' ? 'X' : 'Inoreader'}`, `  URL: ${safeUrl(article.url) || 'keine sichere URL verfügbar'}`);
+    const e = enrichment(article);
+    const excerpt = e?.text || e?.summary || article.text || article.excerpt;
+    if (excerpt) lines.push(`  Auszug: ${String(excerpt).slice(0, 1500)}`);
+  }
+  return lines.join('\n');
+}
+
+async function shareSelectedWithHermes() {
+  if (!ui.selected.size) return;
+  const text = buildHermesHandoff();
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'Leseliste — Hermes-Übergabe', text });
+      notice('Das Teilen-Menü wurde geöffnet. Ob die Übergabe zugestellt wurde, ist nicht bestätigt.');
+      return;
+    }
+    await navigator.clipboard.writeText(text);
+    notice('In die Zwischenablage kopiert. Jetzt manuell in Hermes einfügen; nichts wurde gesendet.');
+  } catch (error) {
+    if (error.name === 'AbortError') notice('Teilen abgebrochen. Es wurde keine erfolgreiche Übergabe bestätigt.');
+    else {
+      notice('Kopieren/Teilen nicht verfügbar. Übergabetext manuell kopieren:', true);
+      const field = document.createElement('textarea');
+      field.readOnly = true; field.value = text; field.setAttribute('aria-label', 'Übergabetext');
+      $('#notice').append(field); field.focus(); field.select();
+    }
+  }
 }
 
 async function perform(operation, message) {
@@ -767,7 +810,15 @@ $$('[data-platform]').forEach(button => button.addEventListener('click', () => s
 $('#page-size').addEventListener('change', (event) => { ui.pageSize = Number(event.target.value); resetView(); });
 $$('.status-tab').forEach((button) => button.addEventListener('click', () => { ui.status = button.dataset.status; resetView(); }));
 $('#select-all').addEventListener('change', (event) => {
+  ui.selectionScope = 'round';
   visibleArticles().filter((a) => !isRemoved(a)).forEach((article) => { if (event.target.checked) ui.selected.add(article.id); else ui.selected.delete(article.id); });
+  render();
+});
+$('#select-filtered').addEventListener('click', () => {
+  const available = filteredArticles().filter((a) => !isRemoved(a));
+  const allSelected = available.length > 0 && available.every((article) => ui.selected.has(article.id));
+  available.forEach((article) => allSelected ? ui.selected.delete(article.id) : ui.selected.add(article.id));
+  ui.selectionScope = allSelected ? 'round' : 'filtered';
   render();
 });
 $$('[data-batch]').forEach((button) => button.addEventListener('click', () => saveDecision([...ui.selected], button.dataset.batch)));
@@ -794,6 +845,12 @@ $('#open-selected').addEventListener('click', () => {
     link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer';
     $('#notice').append(link);
   }
+});
+$('#share-selected').addEventListener('click', shareSelectedWithHermes);
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Delete' || event.repeat || event.isComposing || event.defaultPrevented || event.altKey || event.metaKey || event.ctrlKey || event.shiftKey || ui.busy || !ui.selected.size || document.querySelector('dialog[open]')) return;
+  if (event.target.closest?.('input:not([type=checkbox]),textarea,select,[contenteditable]')) return;
+  event.preventDefault(); saveDecision([...ui.selected], 'remove');
 });
 $('#connect').addEventListener('click', connect);
 $('#x-connect').addEventListener('click', async () => {

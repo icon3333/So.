@@ -15,7 +15,8 @@ def running():
     try:
         with urllib.request.urlopen(ORIGIN + 'api/state', timeout=1) as response:
             data = json.load(response)
-            return data.get('total') == 371 and isinstance(data.get('articles'), list)
+            return (isinstance(data.get('articles'), list)
+                    and isinstance(data.get('state'), dict) and 'sourceInventory' in data)
     except (OSError, ValueError):
         return False
 

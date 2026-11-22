@@ -10,6 +10,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from cockpit import local_sources, posteo_source, global_sources
 from n8n_connection import Connection
 from karakeep_connection import KarakeepConnection
 from triage_state import Store, StateError, now
@@ -19,7 +20,10 @@ from x_connection import XConnection
 
 
 def load_articles(root):
-    snapshot = json.loads((root / 'articles.json').read_text())
+    try:
+        snapshot = json.loads((root / 'articles.json').read_text())
+    except FileNotFoundError:
+        return {'fetchedAt': None}, []
     duplicate_refs = {}
     for group in snapshot.get('sameUrlGroups', []):
         for ref in group:
@@ -521,13 +525,25 @@ class Handler(BaseHTTPRequestHandler):
                     self.send('<h1>X-Anmeldung nicht abgeschlossen</h1><p>' + html.escape(str(exc)) + '</p><a href="/">Zurück zur Leseliste</a>', exc.status, 'text/html; charset=utf-8')
             elif path == '/api/state':
                 self.send(self.app.payload())
+            elif path == '/api/cockpit':
+                sources = local_sources()
+                payload = self.app.payload()
+                saved = set(payload['savedIds'])
+                decisions = payload['state'].get('decisions', {})
+                content = payload.get('xContent', {}).get('entries', {})
+                sources = {**sources, **global_sources(payload['articles'], saved, decisions, content)}
+                self.send(sources)
+            elif path == '/api/cockpit/posteo':
+                if self.headers.get('X-Triage-Request') != '1':
+                    raise StateError('Posteo-Abruf bitte im Cockpit starten.', 403)
+                self.send(posteo_source())
             elif path == '/api/sync/preview':
                 self.send(self.app.preview_removals())
 
-            elif path in ('/', '/index.html', '/app.js', '/styles.css'):
-                filename = 'index.html' if path == '/' else path[1:]
-                types = {'index.html': 'text/html; charset=utf-8', 'app.js': 'text/javascript; charset=utf-8', 'styles.css': 'text/css; charset=utf-8'}
-                self.send((self.app.root / filename).read_bytes(), content_type=types[filename])
+            elif path in ('/', '/index.html', '/app.js', '/styles.css', '/cockpit', '/cockpit.js', '/cockpit.css'):
+                filename = {'/': 'index.html', '/cockpit': 'cockpit.html'}.get(path, path[1:])
+                types = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8'}
+                self.send((self.app.root / filename).read_bytes(), content_type=types[Path(filename).suffix])
             elif path == '/favicon.ico':
                 self.send(b'', 204, 'image/x-icon')
             else:
