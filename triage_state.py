@@ -32,11 +32,12 @@ def atomic_json(path, value):
 
 
 class Store:
-    def __init__(self, path, articles, eligible_ids=None):
+    def __init__(self, path, articles, eligible_ids=None, x_account_id=None):
         self.path = Path(path)
         self.articles = {a['id']: a for a in articles}
         self.eligible_ids = set(self.articles) if eligible_ids is None else set(eligible_ids)
         self.lock = threading.RLock()
+        self.x_account_id = x_account_id
         self.data = {'version': 0, 'decisions': {}, 'history': [], 'karakeepSaved': {},
                      'remote': {'checkedAt': None, 'starredIds': None}}
         if self.path.exists():
@@ -46,6 +47,13 @@ class Store:
                 assert isinstance(saved['decisions'], dict)
                 assert isinstance(saved['history'], list)
                 assert isinstance(saved['remote'], dict)
+                x_remote = saved.get('xRemote', {})
+                assert isinstance(x_remote, dict)
+                assert x_remote.get('accountId') is None or isinstance(x_remote.get('accountId'), str)
+                assert x_remote.get('accountId') in (None, self.x_account_id)
+                assert isinstance(x_remote.get('checkedAt'), (str, type(None)))
+                assert isinstance(x_remote.get('starredIds'), (list, type(None)))
+                assert all(isinstance(i, str) for i in (x_remote.get('starredIds') or []))
                 assert set(saved['decisions']).issubset(self.articles)
                 assert all(v['choice'] in ('keep', 'remove', 'skip') for v in saved['decisions'].values())
                 receipts = saved.setdefault('karakeepSaved', {})
@@ -133,10 +141,22 @@ class Store:
 
     def preview(self):
         with self.lock:
-            stars = self.data['remote']['starredIds']
             items = [self.articles[i] for i, v in self.data['decisions'].items()
-                     if i in self.eligible_ids and v['choice'] == 'remove' and (stars is None or i in stars)]
+                     if i in self.eligible_ids and v['choice'] == 'remove' and self.is_saved(i)]
             return {'version': self.data['version'], 'items': items, 'count': len(items)}
+
+    def is_native(self, article_id):
+        return self.articles[article_id].get('origin') == 'x'
+
+    def is_saved(self, article_id):
+        if self.is_native(article_id):
+            remote = self.data.get('xRemote', {})
+            if remote.get('accountId') != self.articles[article_id].get('originAccountId'):
+                return True  # Unknown membership is never evidence of removal.
+            stars = remote.get('starredIds')
+            return stars is None or self.articles[article_id].get('postId') in stars
+        stars = self.data['remote']['starredIds']
+        return stars is None or article_id in stars
 
     def check_sync(self, version, ids):
         self.check_version(version)
@@ -155,5 +175,24 @@ class Store:
             remaining = set(starred_ids)
             candidate['history'] = [kept for entry in candidate['history']
                                     if (kept := {i: previous for i, previous in entry.items()
-                                                 if i not in self.eligible_ids or i in remaining})]
+                                                 if i not in self.eligible_ids or self.is_native(i) or i in remaining})]
+            self.save(candidate)
+
+    def apply_x_remote(self, account_id, starred_ids, checked_at):
+        """Store account-scoped X membership without changing Inoreader state."""
+        with self.lock:
+            if not isinstance(account_id, str) or not account_id:
+                raise StateError('X account identity is required.')
+            if self.x_account_id != account_id:
+                raise StateError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.', 409)
+            if not isinstance(starred_ids, list) or any(not isinstance(i, str) for i in starred_ids):
+                raise StateError('The X bookmark state could not be fully checked.', 502)
+            candidate = self.view()
+            candidate['xRemote'] = {'accountId': account_id, 'checkedAt': checked_at,
+                                    'starredIds': sorted(set(starred_ids))}
+            remaining = set(starred_ids)
+            candidate['history'] = [kept for entry in candidate['history']
+                                    if (kept := {i: previous for i, previous in entry.items()
+                                                 if i not in self.eligible_ids or not self.is_native(i)
+                                                 or self.articles[i].get('postId') in remaining})]
             self.save(candidate)

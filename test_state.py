@@ -74,4 +74,25 @@ class StateTests(unittest.TestCase):
         scoped.apply_remote([], 'now')
         self.assertEqual(scoped.view()['history'], [{'n': None}])
 
+    def test_x_remote_is_account_scoped_and_inoreader_reconcile_preserves_native_undo(self):
+        articles = [{'id': 'ir', 'url': 'same'}, {'id': 'x:acct:1', 'url': 'same',
+                    'origin': 'x', 'originAccountId': 'acct', 'postId': '1'}]
+        scoped = Store(self.path, articles, x_account_id='acct')
+        scoped.decide(0, ['ir'], 'remove')
+        scoped.decide(1, ['x:acct:1'], 'keep')
+        scoped.apply_x_remote('acct', ['1'], 'x-check')
+        scoped.apply_remote(['ir'], 'ir-check')
+        self.assertEqual(scoped.view()['remote']['starredIds'], ['ir'])
+        self.assertEqual(scoped.view()['xRemote'], {'accountId': 'acct', 'checkedAt': 'x-check', 'starredIds': ['1']})
+        scoped.undo(4)
+        self.assertNotIn('x:acct:1', scoped.view()['decisions'])
+
+    def test_legacy_state_is_not_rewritten_until_a_real_update(self):
+        legacy = {'version': 0, 'decisions': {}, 'history': [], 'karakeepSaved': {},
+                  'remote': {'checkedAt': None, 'starredIds': None}}
+        self.path.write_text(json.dumps(legacy))
+        before = self.path.read_bytes()
+        Store(self.path, self.articles)
+        self.assertEqual(self.path.read_bytes(), before)
+
 if __name__ == '__main__': unittest.main()

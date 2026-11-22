@@ -1,0 +1,91 @@
+"""Persistent catalog for native X bookmarks, separate from articles.json."""
+import copy
+import json
+import re
+import threading
+from pathlib import Path
+
+from triage_state import atomic_json
+
+
+class XBookmarkCatalog:
+    """Account-scoped native entries plus import checkpoint in one atomic file."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.lock = threading.RLock()
+        self.data = {
+            'schemaVersion': 1, 'accountId': None, 'revision': 0,
+            'checkpoint': None, 'complete': False, 'entries': {},
+        }
+        if self.path.exists():
+            try:
+                saved = json.loads(self.path.read_text())
+                assert isinstance(saved, dict) and saved.get('schemaVersion') == 1
+                assert saved.get('accountId') is None or isinstance(saved.get('accountId'), str)
+                assert type(saved.get('revision')) is int and saved['revision'] >= 0
+                assert saved.get('checkpoint') is None or isinstance(saved.get('checkpoint'), str)
+                assert type(saved.get('complete')) is bool
+                assert isinstance(saved.get('entries'), dict)
+                assert all(isinstance(k, str) and isinstance(v, dict) for k, v in saved['entries'].items())
+                assert not saved['entries'] or saved['accountId']
+                assert all(k == self.native_id(saved['accountId'], v.get('postId'))
+                           for k, v in saved['entries'].items())
+                self.data = saved
+            except (ValueError, KeyError, AssertionError, TypeError):
+                raise ValueError('The X bookmark catalog is damaged; it was not overwritten.') from None
+
+    @staticmethod
+    def native_id(account_id, post_id):
+        if (not isinstance(account_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', account_id)
+                or not isinstance(post_id, str) or not re.fullmatch(r'[0-9]+', post_id)):
+            raise ValueError('Account and post identifiers are required.')
+        return 'x:%s:%s' % (account_id, post_id)
+
+    def articles(self):
+        with self.lock:
+            out = []
+            for native_id, entry in self.data['entries'].items():
+                item = copy.deepcopy(entry)
+                item.update(id=native_id, origin='x', originAccountId=self.data['accountId'])
+                out.append(item)
+            return out
+
+    def status(self):
+        with self.lock:
+            return {**{k: copy.deepcopy(v) for k, v in self.data.items() if k != 'entries'},
+                    'count': len(self.data['entries'])}
+
+    def merge_page(self, account_id, entries, next_cursor, complete=False):
+        """Atomically persist a page and its next cursor before another page starts."""
+        if not isinstance(account_id, str) or not account_id:
+            raise ValueError('Account identity is required.')
+        if not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries):
+            raise ValueError('Entries must be a list of records.')
+        if next_cursor is not None and not isinstance(next_cursor, str):
+            raise ValueError('Cursor must be text or None.')
+        if type(complete) is not bool:
+            raise ValueError('Completeness must be boolean.')
+        with self.lock:
+            candidate = copy.deepcopy(self.data)
+            if candidate['accountId'] not in (None, account_id):
+                raise ValueError('Das X-Konto stimmt nicht mit dem gespeicherten Bestand überein.')
+            candidate['accountId'] = account_id
+            for entry in entries:
+                post_id = entry.get('postId')
+                if not isinstance(post_id, str) or not post_id:
+                    raise ValueError('Each record requires a postId.')
+                native_id = self.native_id(account_id, post_id)
+                saved = {**candidate['entries'].get(native_id, {}), **copy.deepcopy(entry)}
+                saved.pop('id', None)
+                saved.pop('origin', None)
+                saved.pop('originAccountId', None)
+                saved['origin'] = 'x'
+                saved['originAccountId'] = account_id
+                candidate['entries'][native_id] = saved
+            candidate['checkpoint'] = next_cursor
+            candidate['complete'] = complete
+            candidate['revision'] += 1
+            atomic_json(self.path, candidate)
+            self.data = candidate
+            return self.articles()

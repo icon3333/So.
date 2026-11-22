@@ -12,6 +12,7 @@ from n8n_connection import Connection
 from karakeep_connection import KarakeepConnection
 from triage_state import Store, StateError
 from x_content import fetch as fetch_x_content, is_x_article, load as load_x_content, save as save_x_content
+from x_bookmarks import XBookmarkCatalog
 
 
 def load_articles(root):
@@ -33,7 +34,7 @@ def load_articles(root):
             title = '@' + match[1] + ' · Inhalt fehlt' if match else 'Inhalt nicht verfügbar'
             excerpt = ''
         a.update(title=title[:5000], excerpt=excerpt[:1200], missingContent=missing,
-                 duplicateRefs=duplicate_refs.get(a['ref'], []))
+                 duplicateRefs=duplicate_refs.get(a['ref'], []), origin='inoreader', originAccountId=None)
         articles.append(a)
     return snapshot, articles
 
@@ -42,9 +43,15 @@ class App:
     def __init__(self, root, origin, state_path=None):
         self.root, self.origin = root, origin
         self.snapshot, self.articles = load_articles(root)
+        self.x_bookmarks = XBookmarkCatalog(root / 'x-bookmarks.json')
+        self.articles.extend(self.x_bookmarks.articles())
+        for article in self.articles:
+            article.setdefault('origin', 'inoreader')
+            article.setdefault('originAccountId', None)
         self.eligible_ids = {a['id'] for a in self.articles}
-        self.x_ids = {a['id'] for a in self.articles if is_x_article(a)}
-        self.store = Store(state_path or root / 'state.json', self.articles, eligible_ids=self.eligible_ids)
+        self.x_ids = {a['id'] for a in self.articles if a['origin'] == 'inoreader' and is_x_article(a)}
+        self.store = Store(state_path or root / 'state.json', self.articles, eligible_ids=self.eligible_ids,
+                           x_account_id=self.x_bookmarks.data['accountId'])
         self.x_content_path = root / 'x-content.json'
         self.x_content = load_x_content(self.x_content_path)
         self.connection = Connection(root, origin)
@@ -53,8 +60,20 @@ class App:
 
     def payload(self):
         return {'articles': self.articles, 'eligibleIds': sorted(getattr(self, 'eligible_ids', {a['id'] for a in self.articles})), 'xContent': getattr(self, 'x_content', {'schemaVersion': 1, 'entries': {}}),
+                'savedIds': [a['id'] for a in self.articles if self.store.is_saved(a['id'])],
+                'xImport': self.x_bookmarks.status() if getattr(self, 'x_bookmarks', None) else None,
                 'total': len(self.articles), 'fetchedAt': self.snapshot['fetchedAt'], 'state': self.store.view(),
                 'connection': self.connection.status(), 'karakeep': self.karakeep.status()}
+
+    def refresh_catalog(self):
+        """Publish an atomically persisted additive page to the active review store."""
+        with self.store.lock:
+            legacy = [a for a in self.articles if a.get('origin') != 'x']
+            self.articles = legacy + self.x_bookmarks.articles()
+            self.eligible_ids = {a['id'] for a in self.articles}
+            self.store.articles = {a['id']: a for a in self.articles}
+            self.store.eligible_ids = self.eligible_ids.copy()
+            self.store.x_account_id = self.x_bookmarks.data['accountId']
 
     def fetch_x(self, article_id):
         with self.operation_lock:
@@ -102,6 +121,8 @@ class App:
     def sync(self, version, ids):
         with self.operation_lock, self.store.lock:
             self.store.check_sync(version, ids)
+            if any(self.store.is_native(i) for i in ids):
+                raise StateError('Native X-Lesezeichen benötigen eine getrennte X-Entfernung.', 409)
             before = self.connection.call('read')
             existing = set(before['starredIds'])
             write_ids = [i for i in ids if i in existing]
