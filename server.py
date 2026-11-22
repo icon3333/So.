@@ -4,7 +4,7 @@ import html
 import json
 import re
 import secrets
-import os
+from data_dir import production_dir
 import threading
 import urllib.error
 import urllib.parse
@@ -621,17 +621,15 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8769)
-    parser.add_argument('--state', type=Path)
+
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
-    configured = os.environ.get('SO_DATA_DIR')
-    if not configured:
-        parser.error('SO_DATA_DIR must name an existing private absolute data directory')
-    data_root = Path(configured)
-    if not data_root.is_absolute() or not data_root.is_dir() or data_root.resolve() == root:
-        parser.error('SO_DATA_DIR must be an existing directory separate from the code root')
+    try:
+        data_root = production_dir(root)
+    except ValueError as error:
+        parser.error(str(error))
     origin = 'http://127.0.0.1:%s' % args.port
-    app = App(root, origin, args.state, data_root=data_root)
+    app = App(root, origin, data_root=data_root)
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     server.app = app
     print('Lesestapel öffnen: ' + origin, flush=True)

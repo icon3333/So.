@@ -12,7 +12,7 @@ Der Code-Ordner enthält ausschließlich Anwendungscode und statische Assets. F�
 Beispiel (Platzhalter ersetzen; keine privaten Pfade ins Repository schreiben):
 
 ```sh
-export SO_DATA_DIR=/absolute/path/to/private/so-data
+export SO_DATA_DIR=/absolute/path/to/private/prod_data  # vorhandener Ordner, Modus 0700
 python3 server.py
 ```
 
