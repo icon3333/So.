@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cockpit · Leseliste</title>
+  <link rel="stylesheet" href="/cockpit.css">
+  <script src="/cockpit.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div><p class="mark">LESELISTE / COCKPIT</p><h1>Was liegt an?</h1></div><a href="/">Leserunde öffnen ↗</a></header>
+    <div class="toolbar">
+      <nav aria-label="Ansicht">
+        <button type="button" data-kind="all" aria-pressed="true">Alles</button>
+        <button type="button" data-kind="task" aria-pressed="false">To-dos</button>
+        <button type="button" data-kind="reading" aria-pressed="false">Lesen</button>
+        <button type="button" data-kind="project" aria-pressed="false">Projekte</button>
+      </nav>
+      <div class="filters">
+        <label>Quelle <select id="sourceFilter"><option value="">Alle</option></select></label>
+        <label>Thema <select id="topicFilter"><option value="">Alle</option></select></label>
+        <label>Format <select id="formatFilter"><option value="">Alle</option></select></label>
+        <label class="search">Suchen <input id="search" type="search" placeholder="Titel, Thema oder Inhalt"></label>
+      </div>
+    </div>
+    <section class="bulk" aria-label="Mehrfachauswahl">
+      <label><input id="selectVisible" type="checkbox"> Alle sichtbaren auswählen</label>
+      <span id="selectionCount" aria-live="polite">0 ausgewählt</span>
+      <button id="copyPrompts" type="button" disabled>Übergabe-Prompt kopieren</button>
+      <button id="reviewSelected" type="button" disabled>Auswahl in Leserunde öffnen</button>
+      <p>Auswahl und Filter ändern keine Originale. Die Leserunde bleibt zuständig für Entscheidungen und Synchronisierung.</p>
+    </section>
+    <details class="sources">
+      <summary>Quellen und Import</summary>
+      <p>Die Originale bleiben unverändert. Lokale Ordner und Keep-Exporte liest der Rechner, auf dem Leseliste läuft.</p>
+      <ul id="sources"></ul>
+      <button type="button" id="reload">Lokale Quellen neu laden</button>
+      <button type="button" id="posteo">Tasks.org über Posteo abrufen</button>
+    </details>
+    <p id="count" role="status">Lade Einträge …</p>
+    <ul aria-label="Einträge" id="items"></ul>
+    <button type="button" id="more" hidden>Weitere Einträge anzeigen</button>
+  </main>
+</body>
+</html>

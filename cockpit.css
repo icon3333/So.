@@ -1,0 +1,15 @@
+*{box-sizing:border-box}
+:root{color-scheme:light;background:#f6f5ee;color:#1e2923;font:1rem/1.5 system-ui,sans-serif}
+body{margin:0}main{width:min(880px,100%);margin:auto;padding:clamp(16px,4vw,40px)}
+header,.toolbar,nav,.filters,.bulk{display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+header{margin-bottom:1.2rem}h1{font:clamp(2rem,5vw,3rem)/1.1 Georgia,serif;margin:.1em 0}.mark{font-size:.72rem;color:#3e574b;letter-spacing:.14em;font-weight:750;margin:0}
+a{color:#245748}button,input,select{font:inherit;color:inherit;border:1px solid #8b9b8f;background:#fff;border-radius:.4rem;min-height:44px;padding:.35rem .65rem}button{cursor:pointer}
+button[aria-pressed=true]{background:#245748;border-color:#245748;color:white}button:disabled{opacity:.6;cursor:wait}
+:focus-visible{outline:3px solid #316da2;outline-offset:3px}summary{cursor:pointer;width:fit-content}.search{display:flex;gap:.4rem;align-items:center}.search input{max-width:100%;min-width:0}.filters{justify-content:flex-start}.filters label{display:flex;gap:.3rem;align-items:center}
+.bulk{justify-content:flex-start;margin:.6rem 0;padding:.65rem;background:#e9ede7;border-radius:.5rem}.bulk p{width:100%;margin:0;font-size:.85rem;color:#40554a}.bulk input{min-height:0}
+.sources{margin-top:.75rem;border-bottom:1px solid #c9d1c8;padding-bottom:.7rem}.sources ul{padding-left:1.2rem}.sources button{margin:.25rem .25rem .25rem 0}
+#count{font-size:.88rem;color:#40554a;margin:.7rem 0}#items{list-style:none;margin:0;padding:0;display:grid;gap:.45rem}
+#items li{background:#fff;border:1px solid #dbe1d9;border-radius:.5rem;padding:.65rem .9rem;display:grid;grid-template-columns:auto 1fr;gap:.12rem .65rem;overflow-wrap:anywhere}
+#items li>input{grid-row:1/5;align-self:start;min-height:0;margin:.2rem}#items small,#items strong,#items details,#items a{grid-column:2}
+#items small{color:#41574c}#items p{white-space:pre-wrap;margin:.3rem 0}#items a,#items summary{width:fit-content;min-height:34px;display:inline-flex;align-items:center}#items summary::before{content:'›';margin-right:.45em}#more{margin-top:.7rem}
+@media(max-width:500px){.search{width:100%}.search input{flex:1}.filters label{width:100%}.filters select{flex:1}}
