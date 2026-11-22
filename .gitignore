@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+state.json
+state.json.*
+server.log
+oauth-client.json
+
+# Private runtime data and generated backlog views stay outside source history.
+articles.json
+x-content.json
+overview.html
+x-bookmarks.json
+
+# Credentials must never enter this source repository.
+.env
+.env.*
+*.pem
+*.key
