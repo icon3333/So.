@@ -40,6 +40,7 @@ class SyncTests(unittest.TestCase):
             code, data, archive = (Path(tmp) / x for x in ('code', 'prod_data', 'archive_data'))
             for folder in (code, data, archive): folder.mkdir()
             (code / 'index.html').write_text('synthetic-code')
+            (code / 'cockpit.html').write_text('synthetic-overview')
             (data / 'articles.json').write_text(json.dumps({'fetchedAt':'synthetic', 'articles':[
                 {'id':'prod','title':'PROD_SENTINEL','ref':'p','url':'https://example.test'}], 'sameUrlGroups':[]}))
             (archive / 'articles.json').write_text(json.dumps({'fetchedAt':'archive', 'articles':[
@@ -51,7 +52,7 @@ class SyncTests(unittest.TestCase):
             self.assertEqual(app.x_content_path, data / 'x-content.json')
             self.assertEqual(app.connection.root, data)
             httpd = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-            httpd.app = app
+            setattr(httpd, 'app', app)
             thread = Thread(target=httpd.serve_forever, daemon=True); thread.start()
             self.addCleanup(httpd.server_close); self.addCleanup(httpd.shutdown)
             import urllib.request
@@ -66,11 +67,33 @@ class SyncTests(unittest.TestCase):
             self.assertNotIn('ARCHIVE_SENTINEL', state)
             for url in ('/articles.json', '/state.json', '/archive_data/articles.json'):
                 with self.assertRaises(Exception): request(url)
-            self.assertEqual(request('/').read(), b'synthetic-code')
+            self.assertEqual(request('/').read(), b'synthetic-overview')
+            self.assertEqual(request('/reader').read(), b'synthetic-code')
             app.store.decide(0, ['prod'], 'keep')
             self.assertTrue((data / 'state.json').is_file())
-            self.assertEqual(list(code.iterdir()), [code / 'index.html'])
+            self.assertEqual(set(code.iterdir()), {code / 'index.html', code / 'cockpit.html'})
             self.assertEqual(list(archive.iterdir()), [archive / 'articles.json'])
+
+    def test_list_first_entry_and_reader_route_are_distinct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'cockpit.html').write_text('So overview')
+            (root / 'index.html').write_text('Reader')
+            app = App.__new__(App)
+            app.root = root
+            app.origin = 'http://127.0.0.1:8769'
+            httpd = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            setattr(httpd, 'app', app)
+            thread = Thread(target=httpd.serve_forever, daemon=True); thread.start()
+            self.addCleanup(httpd.server_close); self.addCleanup(httpd.shutdown)
+            import urllib.request
+            base = 'http://127.0.0.1:%d' % httpd.server_port
+            def request(path):
+                req = urllib.request.Request(base + path, headers={'Host': '127.0.0.1:8769'})
+                return urllib.request.urlopen(req).read().decode()
+            self.assertEqual(request('/'), 'So overview')
+            self.assertEqual(request('/cockpit'), 'So overview')
+            self.assertEqual(request('/reader'), 'Reader')
 
     def test_production_launcher_rejects_missing_bad_or_checkout_data_directory(self):
         script = Path(__file__).with_name('server.py')

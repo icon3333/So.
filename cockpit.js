@@ -24,13 +24,13 @@ function filteredItems() {
   const search=q('#search').value.trim().toLocaleLowerCase();
   return allItems().filter(i=>(kind==='all'||i.kind===kind) &&
     (!q('#sourceFilter').value || (i.sourceLabel || i.group || labels[i.source])===q('#sourceFilter').value) &&
-    (!q('#topicFilter').value || i.topic===q('#topicFilter').value) &&
+    (!q('#topicFilter').value || (i.lifeArea || i.topic)===q('#topicFilter').value) &&
     (!q('#formatFilter').value || i.format===q('#formatFilter').value) &&
-    `${i.title} ${i.group||''} ${i.topic||''} ${i.format||''} ${i.author||''} ${i.detail||''}`.toLocaleLowerCase().includes(search));
+    `${i.title} ${i.group||''} ${i.lifeArea||i.topic||''} ${i.format||''} ${i.author||''} ${i.detail||''}`.toLocaleLowerCase().includes(search));
 }
 function refreshFilters() {
   fillFilter('#sourceFilter',allItems().map(i=>i.sourceLabel || i.group || labels[i.source]));
-  fillFilter('#topicFilter',allItems().map(i=>i.topic));
+  fillFilter('#topicFilter',allItems().map(i=>i.lifeArea || i.topic));
   fillFilter('#formatFilter',allItems().map(i=>i.format));
 }
 function render() {

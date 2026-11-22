@@ -543,8 +543,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/sync/preview':
                 self.send(self.app.preview_removals())
 
-            elif path in ('/', '/index.html', '/app.js', '/styles.css', '/cockpit', '/cockpit.html', '/cockpit.js', '/cockpit.css'):
-                filename = {'/': 'index.html', '/cockpit': 'cockpit.html'}.get(path, path[1:])
+            elif path in ('/', '/index.html', '/reader', '/app.js', '/styles.css', '/cockpit', '/cockpit.html', '/cockpit.js', '/cockpit.css'):
+                filename = {'/': 'cockpit.html', '/cockpit': 'cockpit.html', '/reader': 'index.html'}.get(path, path[1:])
                 types = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8'}
                 self.send((self.app.root / filename).read_bytes(), content_type=types[Path(filename).suffix])
             elif path == '/favicon.ico':
