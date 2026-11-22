@@ -318,6 +318,13 @@ function render() {
   $('#connect').hidden = Boolean(connection.connected);
   $('#connect').disabled = ui.busy || !connection.ready;
   $('#refresh').disabled = ui.busy || !connection.connected;
+  const xConnection = data.xConnection || {};
+  $('#x-connection-message').textContent = xConnection.message || 'X ist nicht verbunden.';
+  $('#x-connection-dot').classList.toggle('connected', Boolean(xConnection.connected));
+  $('#x-connect').hidden = Boolean(xConnection.connected);
+  $('#x-disconnect').hidden = !xConnection.connected;
+  $('#x-connect').disabled = ui.busy;
+  $('#x-disconnect').disabled = ui.busy;
   renderSelection();
   if (ui.detailId && $('#detail-dialog').open) renderDetails();
 }
@@ -610,6 +617,19 @@ $('#open-selected').addEventListener('click', () => {
   }
 });
 $('#connect').addEventListener('click', connect);
+$('#x-connect').addEventListener('click', async () => {
+  if (ui.busy) return;
+  if (!$('#x-user-cost-approval').checked) { notice('Der Identitätsabruf kostet bis zu 0,01 USD. Bitte ausdrücklich freigeben.', true); return; }
+  ui.busy = true; render();
+  try {
+    const result = await request('/api/x/connect', { clientId: $('#x-client-id').value, users: 1, posts: 0, mutations: 0, verification_posts: 0, usd: 0.01 });
+    const url = safeUrl(result.url);
+    if (!url || new URL(url).hostname !== 'x.com') throw new Error('Die X-Anmeldeadresse ist ungültig.');
+    window.location.assign(url);
+  } catch (error) { notice(error.message, true); }
+  finally { ui.busy = false; render(); }
+});
+$('#x-disconnect').addEventListener('click', () => perform(() => request('/api/x/disconnect', {}), 'X-Verbindung getrennt.'));
 $('#karakeep-selected').addEventListener('click', saveSelectedToKarakeep);
 $('#detail-karakeep').addEventListener('click', () => saveToKarakeep(ui.detailId));
 $('#detail-fetch-x').addEventListener('click', fetchXContent);

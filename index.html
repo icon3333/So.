@@ -28,6 +28,15 @@
         <button id="connect" class="button secondary full-width" type="button" disabled>Inoreader verbinden <span aria-hidden="true">↗</span></button>
         <button id="refresh" class="text-button full-width" type="button" disabled>Live-Stand prüfen</button>
       </section>
+      <section class="connection-card" aria-labelledby="x-connection-heading">
+        <div class="connection-title"><span class="connection-dot" id="x-connection-dot"></span><h2 id="x-connection-heading">X-Lesezeichen</h2></div>
+        <p id="x-connection-message" aria-live="polite">Verbindung wird geprüft …</p>
+        <label for="x-client-id">Öffentliche X-Client-ID</label>
+        <input id="x-client-id" autocomplete="off" spellcheck="false">
+        <label><input id="x-user-cost-approval" type="checkbox"> Ich genehmige den Identitätsabruf für höchstens 0,01 USD.</label>
+        <button id="x-connect" class="button secondary full-width" type="button">X verbinden</button>
+        <button id="x-disconnect" class="text-button full-width" type="button" hidden>Trennen</button>
+      </section>
     </aside>
     <main id="main" tabindex="-1">
       <header class="topbar"><span class="eyebrow">INOREADER / SPÄTER LESEN</span><span class="saved-status" id="saved-status">Lade gespeicherten Fortschritt …</span></header>

@@ -20,6 +20,8 @@ class SyncTests(unittest.TestCase):
         self.app.operation_lock = threading.Lock()
         self.app.connection = Mock()
         self.app.connection.status.return_value = {'connected': True}
+        self.app.x_connection = Mock()
+        self.app.x_connection.status.return_value = {'ready': True, 'connected': False, 'account': None}
         self.app.karakeep = Mock()
         self.app.karakeep.status.return_value = {'connected': False}
         self.app.store.decide(0, ['a', 'b'], 'remove')
@@ -100,6 +102,21 @@ class SyncTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 self.app.fetch_x('a')
         self.assertEqual(self.app.x_content['entries'], {})
+
+    def test_x_operation_requires_explicit_budget_and_server_binds_catalog(self):
+        from x_connection import XConnection
+        catalog = Mock()
+        catalog.data = {'accountId': 'acct-1'}
+        connection = XConnection('http://127.0.0.1:8769', catalog)
+        connection.tokens = {'access_token': 'synthetic', 'expires_at': 10**20, 'scopes': []}
+        connection.account = {'id': 'acct-2'}
+        with self.assertRaises(StateError):
+            connection.new_operation({'posts': 1, 'usd': 1})
+        connection.account = {'id': 'acct-1'}
+        from x_connection import SCOPES
+        connection.tokens['scopes'] = list(SCOPES)
+        with self.assertRaises(StateError):
+            connection.new_operation({}).reserve({'posts': 1})
 
 
 if __name__ == '__main__':

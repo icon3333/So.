@@ -13,6 +13,7 @@ from karakeep_connection import KarakeepConnection
 from triage_state import Store, StateError
 from x_content import fetch as fetch_x_content, is_x_article, load as load_x_content, save as save_x_content
 from x_bookmarks import XBookmarkCatalog
+from x_connection import XConnection
 
 
 def load_articles(root):
@@ -44,6 +45,7 @@ class App:
         self.root, self.origin = root, origin
         self.snapshot, self.articles = load_articles(root)
         self.x_bookmarks = XBookmarkCatalog(root / 'x-bookmarks.json')
+        self.x_connection = XConnection(origin, self.x_bookmarks)
         self.articles.extend(self.x_bookmarks.articles())
         for article in self.articles:
             article.setdefault('origin', 'inoreader')
@@ -59,11 +61,13 @@ class App:
         self.operation_lock = threading.Lock()
 
     def payload(self):
+        x_connection = getattr(self, 'x_connection', None)
+        x_status = x_connection.status() if x_connection else {'ready': False, 'connected': False, 'account': None}
         return {'articles': self.articles, 'eligibleIds': sorted(getattr(self, 'eligible_ids', {a['id'] for a in self.articles})), 'xContent': getattr(self, 'x_content', {'schemaVersion': 1, 'entries': {}}),
                 'savedIds': [a['id'] for a in self.articles if self.store.is_saved(a['id'])],
                 'xImport': self.x_bookmarks.status() if getattr(self, 'x_bookmarks', None) else None,
                 'total': len(self.articles), 'fetchedAt': self.snapshot['fetchedAt'], 'state': self.store.view(),
-                'connection': self.connection.status(), 'karakeep': self.karakeep.status()}
+                'connection': self.connection.status(), 'xConnection': x_status, 'karakeep': self.karakeep.status()}
 
     def refresh_catalog(self):
         """Publish an atomically persisted additive page to the active review store."""
@@ -196,6 +200,17 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                 except StateError as exc:
                     self.send('<h1>Anmeldung nicht abgeschlossen</h1><p>' + html.escape(str(exc)) + '</p><a href="/">Zurück zur Leseliste</a>', exc.status, 'text/html; charset=utf-8')
+            elif path == '/oauth/x/callback':
+                try:
+                    self.app.x_connection.finish(urllib.parse.parse_qs(parsed.query))
+                    self.send_response(303)
+                    self.send_header('Location', '/')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('Referrer-Policy', 'no-referrer')
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                except StateError as exc:
+                    self.send('<h1>X-Anmeldung nicht abgeschlossen</h1><p>' + html.escape(str(exc)) + '</p><a href="/">Zurück zur Leseliste</a>', exc.status, 'text/html; charset=utf-8')
             elif path == '/api/state':
                 self.send(self.app.payload())
             elif path == '/api/sync/preview':
@@ -237,6 +252,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(self.app.payload())
             elif path == '/api/connect':
                 self.send(self.app.connection.begin())
+            elif path == '/api/x/connect':
+                approval = {'users': body.get('users', 0), 'posts': body.get('posts', 0),
+                            'mutations': body.get('mutations', 0), 'verification_posts': body.get('verification_posts', 0),
+                            'usd': body.get('usd', 0)}
+                result = self.app.x_connection.begin(body.get('clientId'), approval)
+                self.send(result)
+            elif path == '/api/x/disconnect':
+                self.app.x_connection.disconnect()
+                self.send(self.app.payload())
             elif path == '/api/refresh':
                 self.send(self.app.refresh())
             elif path == '/api/sync':
