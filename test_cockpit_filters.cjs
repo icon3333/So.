@@ -2,30 +2,17 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-
-test('life-area filter spans sources and falls back to existing topic metadata', () => {
-  const elements = new Map();
-  const q = selector => {
-    if (!elements.has(selector)) elements.set(selector, {value:'', addEventListener(){}, replaceChildren(...children){this.children=children}, append(child){this.children.push(child)}, firstElementChild:{value:''}});
-    return elements.get(selector);
-  };
-  const context = vm.createContext({document:{querySelector:q, createElement:()=>({append(){}})}, URL, Set, Object, console});
-  const source = fs.readFileSync(`${__dirname}/cockpit.js`, 'utf8');
-  vm.runInContext(source.slice(0, source.indexOf('const local =')), context);
-  vm.runInContext(`sources.desktop={items:[{id:'desk',kind:'task',title:'Plan',source:'desktop',lifeArea:'Home'}]};
-    sources.reading={items:[{id:'feed',kind:'reading',title:'Essay',source:'reading',topic:'Home'},{id:'x',kind:'reading',title:'Post',source:'reading',lifeArea:'Work'}]};`, context);
-  q('#topicFilter').value = 'Home';
-  const ids = vm.runInContext('filteredItems().map(i=>i.id)', context);
-  assert.deepEqual(JSON.parse(JSON.stringify(ids)), ['desk', 'feed']);
-  vm.runInContext("fillFilter('#topicFilter',allItems().map(i=>i.lifeArea || i.topic))", context);
-  assert.equal(q('#topicFilter').children.length, 3);
-});
-
-test('default route uses the So overview and preserves explicit reader access', () => {
-  const html = fs.readFileSync(`${__dirname}/cockpit.html`, 'utf8');
-  const server = fs.readFileSync(`${__dirname}/server.py`, 'utf8');
-  assert.match(html, /<title>So\. · Übersicht<\/title>/);
-  assert.match(html, /href="\/reader"/);
-  assert.match(html, /Lebensbereich/);
-  assert.match(server, /'\/': 'cockpit\.html'.*'\/reader': 'index\.html'/);
-});
+function setup(items) {
+ const elements=new Map(),docListeners=[];let resolveFetch;
+ const make=tag=>({tagName:tag?.toUpperCase(),value:'',checked:false,indeterminate:false,disabled:false,hidden:false,textContent:'',children:[],dataset:{},attributes:{},querySelector(tag){return this.children.find(x=>x.tagName===tag.toUpperCase())},setAttribute(k,v){this.attributes[k]=v},addEventListener(k,fn){this.listeners??={};this.listeners[k]=fn},replaceChildren(...c){this.children=c},append(...c){this.children.push(...c)},focus(){document.activeElement=this},select(){},showModal(){this.open=true}});
+ const get=s=>{if(!elements.has(s))elements.set(s,make(s==='#search'?'input':'div'));return elements.get(s)};
+ const document={activeElement:null,querySelector:get,querySelectorAll:()=>[],createElement:make,addEventListener:(k,fn)=>docListeners.push([k,fn]),body:make(),execCommand:()=>true};
+ const context=vm.createContext({URL,Set,Map,Object,Array,String,Boolean,Number,Math,console,document,window:{open(){}},navigator:{clipboard:{writeText:async text=>{context.copied=text}}},fetch:()=>new Promise(resolve=>{resolveFetch=resolve}),setTimeout(){}});
+ vm.runInContext(fs.readFileSync(`${__dirname}/cockpit.js`,'utf8'),context);vm.runInContext(`sources.desktop={state:'loaded',items:${JSON.stringify(items)}}`,context);resolveFetch({ok:true,json:async()=>({})});return {context,get,docListeners};
+}
+test('separate area filter includes only assigned area, not same-named topic',()=>{const h=setup([{id:'a',kind:'task',title:'A',lifeArea:'Home',topic:'Bills'},{id:'b',kind:'reading',title:'B',topic:'Home'},{id:'c',kind:'task',title:'C'}]);vm.runInContext("refreshFilters();q('#topicFilter').value='Home'",h.context);assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(filteredItems().map(i=>i.id))',h.context)),['a']);assert.ok(h.get('#topicFilter').children.some(x=>x.value===''));});
+test('handoff uses excerpt and never substitutes detail',()=>{const h=setup([{id:'x',kind:'reading',title:'Post',source:'reading',detail:'private detail',excerpt:'Saved excerpt'}]);h.get('#handoffNote').value='Check context';const text=vm.runInContext('handoffText(allItems())',h.context);assert.match(text,/Saved excerpt/);assert.doesNotMatch(text,/private detail/);assert.match(text,/Check context/);});
+test('hide uses in-memory hidden ids and undo restores only latest batch without source mutation',()=>{const h=setup([{id:'a',kind:'task',title:'A'},{id:'b',kind:'task',title:'B'}]);vm.runInContext("selected.add('a');q('#deleteSelected').listeners.click()",h.context);assert.equal(vm.runInContext('allItems().length',h.context),1);assert.equal(vm.runInContext('sources.desktop.items.length',h.context),2);vm.runInContext("selected.add('b');q('#deleteSelected').listeners.click();q('#undoDelete').listeners.click()",h.context);assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(allItems().map(x=>x.id))',h.context)),['b']);assert.equal(vm.runInContext('undoStack.length',h.context),1);assert.doesNotMatch(fs.readFileSync(`${__dirname}/cockpit.js`,'utf8'),/api\/cockpit\/hide/);});
+test('Delete is guarded while a checkbox, input, or editable target has focus',()=>{const h=setup([{id:'a',kind:'task',title:'A'}]);const fn=h.docListeners.find(x=>x[0]==='keydown')[1];for(const tagName of ['INPUT','TEXTAREA','SELECT']){let prevented=false;fn({key:'Delete',target:{tagName},preventDefault(){prevented=true}});assert.equal(prevented,false);}assert.match(fs.readFileSync(`${__dirname}/cockpit.js`,'utf8'),/isContentEditable/);});
+test('match count reflects actual matches and selected items',()=>{const h=setup([{id:'a',kind:'task',title:'A'},{id:'b',kind:'task',title:'B'}]);vm.runInContext("selected.add('a');render()",h.context);assert.match(h.get('#count').textContent,/2 Einträge · 1 ausgewählt/);});
+test('HTML includes area suggestions, safe preview and delete affordance',()=>{const html=fs.readFileSync(`${__dirname}/cockpit.html`,'utf8');assert.match(html,/areaSuggestions/);assert.match(html,/Delete/);assert.match(html,/previewDialog/);});

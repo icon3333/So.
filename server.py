@@ -2,6 +2,7 @@
 import argparse
 import html
 import json
+
 import re
 import secrets
 from data_dir import production_dir
@@ -14,7 +15,7 @@ from pathlib import Path
 from cockpit import local_sources, posteo_source, global_sources
 from n8n_connection import Connection
 from karakeep_connection import KarakeepConnection
-from triage_state import Store, StateError, now
+from triage_state import Store, StateError, now, atomic_json
 from x_content import fetch as fetch_x_content, is_x_article, x_post_id, load as load_x_content, save as save_x_content
 from x_bookmarks import XBookmarkCatalog
 from x_connection import XConnection
@@ -69,6 +70,59 @@ class App:
         self.karakeep = KarakeepConnection()
         self.operation_lock = threading.RLock()
         self.removal_confirmations = {}
+        self.area_path = self.data_root / 'cockpit-areas.json'
+        self.posteo_ids = set()
+
+    def cockpit_areas(self):
+        try:
+            value = json.loads(self.area_path.read_text(encoding='utf-8'))
+        except FileNotFoundError:
+            return {}
+        if not isinstance(value, dict) or not all(isinstance(area, str) for area in value.values()):
+            raise StateError('Bereichszuordnungen sind beschädigt.', 500)
+        return value
+
+    def assign_cockpit_area(self, ids, life_area):
+        if (not isinstance(ids, list) or not ids or
+                any(not isinstance(item_id, str) or not item_id for item_id in ids) or
+                len(set(ids)) != len(ids) or not isinstance(life_area, str) or
+                len(life_area.strip()) > 160):
+            raise StateError('Ungültige Bereichszuordnung.')
+        with self.operation_lock:
+            known = {item['id'] for entry in self.cockpit_items().values()
+                     for item in entry['items']}
+            if any(item_id not in known and item_id not in getattr(self, 'posteo_ids', ()) for item_id in ids):
+                raise StateError('Ein Eintrag ist nicht mehr verfügbar.')
+            areas = self.cockpit_areas()
+            for item_id in ids:
+                if life_area.strip():
+                    areas[item_id] = life_area.strip()
+                else:
+                    areas.pop(item_id, None)
+            atomic_json(self.area_path, areas)
+
+    def cockpit_posteo(self):
+        source = posteo_source()
+        with self.operation_lock:
+            self.posteo_ids = {item['id'] for item in source['items']}
+            areas = self.cockpit_areas()
+            for item in source['items']:
+                item.update(lifeArea=areas.get(item['id'], ''), excerpt='', excerptStatus='missing')
+        return source
+
+    def cockpit_items(self):
+        sources = local_sources()
+        payload = self.payload()
+        sources = {**sources, **global_sources(payload['articles'], set(payload['savedIds']),
+                                                payload['state'].get('decisions', {}),
+                                                payload.get('xContent', {}).get('entries', {}))}
+        areas = self.cockpit_areas()
+        for entry in sources.values():
+            for item in entry.get('items', []):
+                item['lifeArea'] = areas.get(item['id'], '')
+                item['excerpt'] = (item.get('detail') or '') if item['source'] in ('reading', 'keep') else ''
+                item['excerptStatus'] = 'available' if item['excerpt'] else 'missing'
+        return sources
 
     def payload(self):
         if getattr(self, 'x_content_path', None) and self.x_content_path.exists():
@@ -529,17 +583,18 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/state':
                 self.send(self.app.payload())
             elif path == '/api/cockpit':
-                sources = local_sources()
-                payload = self.app.payload()
-                saved = set(payload['savedIds'])
-                decisions = payload['state'].get('decisions', {})
-                content = payload.get('xContent', {}).get('entries', {})
-                sources = {**sources, **global_sources(payload['articles'], saved, decisions, content)}
+                sources = self.app.cockpit_items()
+                query = urllib.parse.parse_qs(parsed.query)
+                area = query.get('lifeArea', [None])[0]
+                if area is not None:
+                    for entry in sources.values():
+                        entry['items'] = [item for item in entry.get('items', [])
+                                          if item.get('lifeArea') == area]
                 self.send(sources)
             elif path == '/api/cockpit/posteo':
                 if self.headers.get('X-Triage-Request') != '1':
                     raise StateError('Posteo-Abruf bitte im Cockpit starten.', 403)
-                self.send(posteo_source())
+                self.send(self.app.cockpit_posteo())
             elif path == '/api/sync/preview':
                 self.send(self.app.preview_removals())
 
@@ -570,7 +625,10 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise StateError('Ungültige Anfrage.')
             path = urllib.parse.urlsplit(self.path).path
-            if path == '/api/fetch-x':
+            if path == '/api/cockpit/areas':
+                self.app.assign_cockpit_area(body.get('ids'), body.get('lifeArea'))
+                self.send({'ok': True})
+            elif path == '/api/fetch-x':
                 self.send(self.app.fetch_x(body.get('id')))
             elif path == '/api/decisions':
                 self.app.store.decide(body.get('version'), body.get('ids'), body.get('choice'))

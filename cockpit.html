@@ -25,11 +25,17 @@
       </div>
     </div>
     <section class="bulk" aria-label="Mehrfachauswahl">
-      <label><input id="selectVisible" type="checkbox"> Alle sichtbaren auswählen</label>
+      <label><input id="selectVisible" type="checkbox"> Alle Filtertreffer auswählen (auch auf weiteren Seiten)</label>
       <span id="selectionCount" aria-live="polite">0 ausgewählt</span>
-      <button id="copyPrompts" type="button" disabled>Übergabe-Prompt kopieren</button>
-      <button id="reviewSelected" type="button" disabled>Auswahl in Leserunde öffnen</button>
-      <p>Auswahl und Filter ändern keine Originale. Die Leserunde bleibt zuständig für Entscheidungen und Synchronisierung.</p>
+      <details id="batchTools"><summary>Aktionen für die Auswahl</summary>
+      <button id="copyPrompts" type="button" disabled>Übergabe ansehen</button>
+      <button id="reviewSelected" type="button" disabled>Linkstapel prüfen</button>
+      <label>Lebensbereich <input id="bulkArea" type="text" list="areaSuggestions" placeholder="Zuordnung (optional)"></label><datalist id="areaSuggestions"></datalist>
+      <button id="assignArea" type="button" disabled>Zuordnung speichern</button>
+      <button id="deleteSelected" type="button" disabled>Aus Auswahl ausblenden (Delete)</button><button id="undoDelete" type="button" disabled>Letztes Ausblenden rückgängig</button>
+      <label>Eigene Nachricht <input id="handoffNote" type="text" maxlength="500" placeholder="Optional"></label>
+      <p>Auswahl, Vormerken und Undo ändern keine Originale. Zuordnungen werden lokal gespeichert. Weitergabe erfolgt nur nach manueller Prüfung.</p>
+      </details>
     </section>
     <details class="sources">
       <summary>Quellen und Import</summary>
@@ -42,5 +48,7 @@
     <ul aria-label="Einträge" id="items"></ul>
     <button type="button" id="more" hidden>Weitere Einträge anzeigen</button>
   </main>
+  <dialog id="reviewDialog"><h2>Auswahl öffnen</h2><p id="reviewCount"></p><button type="button" id="openBatch">Links in Tabs öffnen</button><div id="reviewLinks"></div><form method="dialog"><button>Schließen</button></form></dialog>
+  <dialog id="previewDialog"><h2>Manuelle Vorschau für Hermes</h2><p>Es wird nichts gesendet. Prüfe den Text und kopiere ihn erst auf Wunsch.</p><textarea id="previewText" rows="14"></textarea><p id="previewStatus" role="status"></p><button id="copyPreview" type="button">Vorschau kopieren</button><form method="dialog"><button>Schließen</button></form></dialog>
 </body>
 </html>

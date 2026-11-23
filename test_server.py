@@ -35,6 +35,90 @@ class SyncTests(unittest.TestCase):
     def remote(self, ids):
         return {'starredIds': ids, 'checkedAt': 'now'}
 
+    def test_cockpit_area_assignments_persist_by_stable_item_id_and_filter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            articles = [
+                {'id': 'article-1', 'origin': 'inoreader', 'title': 'Synthetic one', 'url': 'https://example.test/1', 'excerpt': 'Synthetic excerpt'},
+                {'id': 'article-2', 'origin': 'inoreader', 'title': 'Synthetic two', 'url': 'https://example.test/2'},
+            ]
+            app = App.__new__(App)
+            app.data_root = root
+            app.area_path = root / 'cockpit-areas.json'
+            app.operation_lock = threading.RLock()
+            app.articles = articles
+            saved_ids = {'article-1', 'article-2'}
+            app.x_content = {'entries': {}}
+            app.store = Mock()
+            app.store.is_saved.side_effect = lambda item_id: item_id in saved_ids
+            app.store.view.return_value = {'decisions': {}}
+            app.snapshot = {'fetchedAt': None}
+            app.x_bookmarks = Mock()
+            app.x_bookmarks.articles.return_value = []
+            app.x_bookmarks.data = {'accountId': None}
+            app.x_content_path = root / 'x-content.json'
+            app.payload = lambda: {'articles': articles, 'savedIds': list(saved_ids),
+                                   'state': {'decisions': {}}, 'xContent': {'entries': {}}}
+            with patch('server.local_sources', return_value={'to': {'state': 'ready', 'items': []}}):
+                item_id = __import__('cockpit').item('reading', 'article-1', 'Synthetic one', 'reading')['id']
+                app.assign_cockpit_area([item_id], 'Home')
+                first = app.cockpit_items()['reading']['items'][0]
+                self.assertEqual(first['lifeArea'], 'Home')
+                self.assertEqual(first['excerpt'], 'Synthetic excerpt')
+                self.assertEqual(first['excerptStatus'], 'available')
+                app2 = App.__new__(App)
+                app2.data_root = root
+                app2.area_path = root / 'cockpit-areas.json'
+                app2.operation_lock = threading.RLock()
+                app2.articles = articles
+
+                app2.x_content = {'entries': {}}
+                app2.store = app.store
+                app2.snapshot = app.snapshot
+                app2.x_bookmarks = app.x_bookmarks
+                app2.x_content_path = root / 'x-content.json'
+                app2.payload = app.payload
+                with patch('server.local_sources', return_value={'to': {'state': 'ready', 'items': []}}):
+                    self.assertEqual(app2.cockpit_items()['reading']['items'][0]['lifeArea'], 'Home')
+                    self.assertEqual([i['id'] for i in app2.cockpit_items()['reading']['items']
+                                      if i['lifeArea'] == 'Home'], [item_id])
+
+    def test_concurrent_area_assignments_are_atomic_and_do_not_lose_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = App.__new__(App)
+            app.data_root = Path(tmp)
+            app.area_path = app.data_root / 'cockpit-areas.json'
+            app.operation_lock = threading.RLock()
+            ids = ['stable:a', 'stable:b']
+            app.cockpit_items = lambda: {'reading': {'items': [{'id': value} for value in ids]}}
+            barrier = threading.Barrier(3)
+            def assign(value):
+                barrier.wait()
+                app.assign_cockpit_area([value], 'Home')
+            threads = [threading.Thread(target=assign, args=(value,)) for value in ids]
+            for thread in threads: thread.start()
+            barrier.wait()
+            for thread in threads: thread.join()
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(app.cockpit_areas(), {value: 'Home' for value in ids})
+            self.assertEqual(list(Path(tmp).glob('*.tmp')) + list(Path(tmp).glob('.*.tmp')), [])
+
+    def test_cockpit_posteo_is_only_loaded_on_explicit_endpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = App.__new__(App)
+            app.data_root = Path(tmp)
+            app.area_path = app.data_root / 'cockpit-areas.json'
+            app.operation_lock = threading.RLock()
+            app.payload = lambda: {'articles': [], 'savedIds': [], 'state': {'decisions': {}},
+                                   'xContent': {'entries': {}}}
+            with patch('server.local_sources', return_value={'to': {'state': 'ready', 'items': []}}), \
+                    patch('server.posteo_source', side_effect=AssertionError('unexpected Posteo call')):
+                app.cockpit_items = lambda: {'to': {'items': [{'id': 'desktop-id'}]}}
+                self.assertIn('to', app.cockpit_items())
+                # Normal cockpit GET and assignment save do not request the Posteo adapter.
+                app.assign_cockpit_area(['desktop-id'], 'Home')
+                self.assertEqual(app.cockpit_areas()['desktop-id'], 'Home')
+
     def test_production_data_root_separates_all_runtime_files_and_archive_is_private(self):
         with tempfile.TemporaryDirectory() as tmp:
             code, data, archive = (Path(tmp) / x for x in ('code', 'prod_data', 'archive_data'))
