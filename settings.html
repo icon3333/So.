@@ -14,7 +14,8 @@
     </header>
     <section class="intro" aria-labelledby="page-title">
       <p class="eyebrow">So. / Einstellungen</p>
-      <h1 id="page-title">Integration</h1>
+      <h1 id="page-title">Einrichtung</h1>
+      <p>Wähle eine Quelle, trage die nötigen Angaben ein und teste oder importiere sie. Karakeep ist ausschließlich das Speicherziel.</p>
     </section>
     <ul id="integrations" class="integrations" aria-label="Konten und Importquellen" aria-live="polite">
       <li>Integrationen werden geladen …</li>
@@ -28,14 +29,13 @@
   <dialog id="provider-dialog" aria-labelledby="dialog-title">
     <form id="provider-form">
       <button type="button" class="close" aria-label="Schließen">×</button>
-      <p class="eyebrow">VERBINDUNG VERWALTEN</p>
+      <p class="eyebrow">EINRICHTEN · TESTEN</p>
       <h2 id="dialog-title"></h2>
       <p id="dialog-message"></p>
       <div id="provider-fields"></div>
       <p id="action-status" role="status" aria-live="polite"></p>
       <div class="actions">
-        <button type="button" data-action="test">Verbindung testen</button>
-        <button type="button" class="primary" data-action="connect">Verbinden</button>
+        <button type="button" class="primary" data-action="setup">Einrichten</button>
       </div>
     </form>
   </dialog>
