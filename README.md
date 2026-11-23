@@ -34,11 +34,11 @@ mkdir -p -m 700 "$SO_DATA_DIR"
 python3 server.py
 ```
 
-Öffne [127.0.0.1:8769](http://127.0.0.1:8769/). Die Übersicht ist die Startseite; die Leserunde findest du unter [`/reader`](http://127.0.0.1:8769/reader). Ohne lokale Quellen oder importierte Daten kann die Liste leer sein.
+Öffne [127.0.0.1:8769](http://127.0.0.1:8769/). Die Startseite und [`/reader`](http://127.0.0.1:8769/reader) zeigen dieselbe integrierte Liste. Die früheren Cockpit-Adressen `/cockpit` und `/cockpit.html` führen ebenfalls dorthin. Einstellungen bleiben unter [`/settings`](http://127.0.0.1:8769/settings). Ohne lokale Quellen oder importierte Daten kann die Liste leer sein.
 
 ## Quellen und Daten
 
-Im Cockpit und im Reader öffnet **Einstellungen → Integrationen** die Verbindungsdialoge. Ein Kontotest läuft erst auf Klick; bei X ist vorher eine Kostenfreigabe nötig. Inoreader nutzt den vorhandenen n8n-OAuth-Dienst, Tasks.org/Posteo den serverseitigen Leseadapter. Der Test ersetzt nicht die Einrichtung dieser Dienste.
+In der Liste öffnet **Einstellungen → Integrationen** die Verbindungsdialoge. Ein Kontotest läuft erst auf Klick; bei X ist vorher eine Kostenfreigabe nötig. Inoreader nutzt den vorhandenen n8n-OAuth-Dienst, Tasks.org/Posteo den serverseitigen Leseadapter. Der Test ersetzt nicht die Einrichtung dieser Dienste.
 
 Keep-Takeout, Desktop-To-dos und Projekte bleiben Dateiimporte. Um im Dialog einen Ordner zu wählen, setze `LESELISTE_IMPORT_ROOT` auf einen separaten Importordner (nicht Checkout, Home oder Produktivdatenordner). Wähle darunter den relativen Pfad zu `Keep`, `To` oder `Projects`, teste ihn und speichere ihn erst danach. Ohne neue Konfiguration gelten die folgenden Standardpfade.
 

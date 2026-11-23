@@ -643,7 +643,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(self.app.preview_removals())
 
             elif path in ('/', '/index.html', '/reader', '/app.js', '/styles.css', '/cockpit', '/cockpit.html', '/cockpit.js', '/cockpit.css', '/settings', '/settings.js', '/settings.css'):
-                filename = {'/': 'cockpit.html', '/cockpit': 'cockpit.html', '/reader': 'index.html', '/settings': 'settings.html'}.get(path, path[1:])
+                filename = {'/': 'index.html', '/cockpit': 'index.html', '/cockpit.html': 'index.html', '/reader': 'index.html', '/settings': 'settings.html'}.get(path, path[1:])
                 types = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8'}
                 self.send((self.app.root / filename).read_bytes(), content_type=types[Path(filename).suffix])
             elif path == '/favicon.ico':

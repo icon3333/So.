@@ -142,13 +142,57 @@ function scopedArticles() {
   return data.articles.filter((a) => eligible(a) && (!ui.topic || topic(a) === ui.topic) && (!ui.source || source(a) === ui.source) && (!query || [displayTitle(a), displayText(a), a.url, a.ref, source(a), topic(a)].join(' ').toLocaleLowerCase('de').includes(query)));
 }
 
+
+// Supplemental cockpit items share the review list, but never reader decisions.
+let cockpitLocal = [];
+let cockpitAreas = {};
+const localHidden = new Set();
+const localUndo = new Set();
+let readerKeys = new Map();
+const areaKey = a => a.originalId || readerKeys.get(a.id);
+const allItems = () => [...data.articles, ...cockpitLocal];
+function isLocalItem(a) { return a?.localItem === true; }
+function localUrl(a) { try { const u = new URL(a.url); return ['http:', 'https:'].includes(u.protocol) ? u.href : ''; } catch { return ''; } }
+function matchesCommonFilters(a) {
+  const value = id => document.querySelector('#'+id)?.value || '';
+  return (!value('kind-filter') || (a.kind || 'reading') === value('kind-filter')) &&
+    (!value('area-filter') || (cockpitAreas[areaKey(a)] || a.topic) === value('area-filter')) &&
+    (!value('format-filter') || (a.format || a.kind) === value('format-filter'));
+}
+async function loadCockpit() {
+  try {
+    const response = await fetch('/api/cockpit', { cache: 'no-store' });
+    if (!response.ok) return;
+    const payload = await response.json();
+    cockpitAreas = Object.fromEntries(Object.values(payload).flatMap(x => x?.items || []).map(i => [i.id, i.lifeArea || '']).filter(x => x[1]));
+    readerKeys = new Map((payload.reading?.items || []).map(i => [i.readerId, i.id]));
+    const entries = Object.values(payload).flatMap(x => x?.items || []);
+    cockpitLocal = entries.filter(i => i.source !== 'reading').map(i => ({...i, id:`local:${i.id}`, originalId:i.id, localItem:true, url:i.url || '', title:i.title || '(ohne Titel)', sourceLabel:i.sourceLabel || i.group || i.source || 'Lokal', excerpt:i.excerpt || i.detail || ''}));
+  } catch {}
+}
+async function assignAreas(ids, lifeArea) {
+  const response = await fetch('/api/cockpit/areas', {method:'POST', headers:{'Content-Type':'application/json','X-Triage-Request':'1'}, body:JSON.stringify({ids, lifeArea})});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Bereich konnte nicht gespeichert werden.');
+  ids.forEach(id => { if (lifeArea) cockpitAreas[id] = lifeArea; else delete cockpitAreas[id]; });
+  render();
+}
+function hideSelectedLocal() {
+  const ids = [...ui.selected];
+  ids.forEach(id => { localHidden.add(id); localUndo.add(id); ui.selected.delete(id); }); render();
+}
+function undoHiddenLocal() {
+  localUndo.forEach(id => localHidden.delete(id)); localUndo.clear(); render();
+}
+
 function filteredArticles() {
-  return scopedArticles().filter((a) => {
+  return [...scopedArticles().filter(a=>!localHidden.has(a.id)&&matchesCommonFilters(a)), ...cockpitLocal.filter(a => !localHidden.has(a.id) && matchesCommonFilters(a) && (!ui.search || `${a.title} ${a.sourceLabel} ${a.excerpt}`.toLowerCase().includes(ui.search.toLowerCase())) && (!ui.source || a.sourceLabel === ui.source))].filter((a) => {
+    if (isLocalItem(a)) return ui.collection === 'all' && !ui.platform && !ui.topic && ['all','open','saved'].includes(ui.status);
     if (ui.status === 'all') return true;
     if (ui.status === 'saved') return !isRemoved(a);
     if (ui.status === 'open') return !isDecided(a);
     return !isRemoved(a) && choice(a) === ui.status;
-  }).sort((a, b) => ui.status === 'open' ? Number(choice(a) === 'skip') - Number(choice(b) === 'skip') : 0);
+  }).sort((a, b) => ui.status === 'open' && !isLocalItem(a) && !isLocalItem(b) ? Number(choice(a) === 'skip') - Number(choice(b) === 'skip') : 0);
 }
 
 function visibleArticles() {
@@ -286,8 +330,8 @@ function renderTopics() {
 }
 
 function renderSourceOptions() {
-  const names = [...new Set(data.articles.filter(eligible).map(source))].sort((a, b) => a.localeCompare(b, 'de'));
-  const options = [new Option('Alle Websites', ''), ...names.map((name) => new Option(name, name))];
+  const names = [...new Set([...data.articles.filter(eligible).map(source), ...cockpitLocal.map(a=>a.sourceLabel)])].sort((a, b) => a.localeCompare(b, 'de'));
+  const options = [new Option('Alle Quellen', ''), ...names.map((name) => new Option(name, name))];
   $('#source').replaceChildren(...options);
   $('#source').value = ui.source;
   $('#source').closest('.source-field').hidden = names.length < 2;
@@ -300,13 +344,14 @@ function decisionLabel(article) {
 
 function renderArticle(article) {
   const row = node('article', `article-row${ui.selected.has(article.id) ? ' selected' : ''}`);
+  if (isLocalItem(article)) row.classList.add('local-item-row');
   row.dataset.id = article.id;
   const label = node('label', 'row-select');
   const checkbox = node('input');
   checkbox.type = 'checkbox';
   checkbox.dataset.action = 'select';
   checkbox.checked = ui.selected.has(article.id);
-  checkbox.disabled = ui.busy || isRemoved(article);
+  checkbox.disabled = ui.busy || (!isLocalItem(article) && isRemoved(article));
   checkbox.setAttribute('aria-label', `Artikel auswählen: ${displayTitle(article)}`);
   checkbox.addEventListener('change', () => {
     if (checkbox.checked) ui.selected.add(article.id); else ui.selected.delete(article.id);
@@ -321,14 +366,16 @@ function renderArticle(article) {
   title.addEventListener('click', () => openDetails(article.id));
   const meta = node('div', 'article-meta');
   meta.append(node('span', 'source-name', source(article)), node('span', 'meta-separator', '·'), node('span', '', formatDate(article.published)), node('span', 'topic-tag', topic(article)));
-  if (choice(article) || isRemoved(article)) meta.append(node('span', `decision-tag ${isRemoved(article) ? 'removed' : choice(article)}`, decisionLabel(article)));
+  if (isLocalItem(article)) meta.append(node('span', 'decision-tag', cockpitAreas[article.originalId] || 'Lokal'));
+  if (isLocalItem(article)) meta.append(node('span','decision-tag',article.sourceLabel));
+  if (!isLocalItem(article) && (choice(article) || isRemoved(article))) meta.append(node('span', `decision-tag ${isRemoved(article) ? 'removed' : choice(article)}`, decisionLabel(article)));
   if (!enrichment(article)?.summary && article.missingContent) meta.append(node('span', 'missing-tag', 'Inhalt unklar'));
   if (savedToKarakeep(article)) meta.append(node('span', 'decision-tag', 'In Karakeep gespeichert'));
   content.append(title, meta);
   const excerpt = enrichment(article)?.summary || enrichment(article)?.text || article.excerpt;
   if (excerpt) content.append(node('p', 'article-excerpt', excerpt.replace(/\s+/g, ' ').trim()));
-  const url = safeUrl(article.url);
-  if (url) {
+  const url = isLocalItem(article) ? localUrl(article) : safeUrl(article.url);
+  if (url && !isLocalItem(article)) {
     const original = node('a', 'button secondary row-original', 'Original öffnen ↗');
     original.href = url;
     original.target = '_blank';
@@ -345,6 +392,7 @@ function renderArticle(article) {
     content.append(save);
   }
   const actions = node('div', 'row-actions');
+  if (isLocalItem(article)) { if (url) { const original=node('a','button secondary row-original','Original öffnen ↗'); original.href=url; original.target='_blank'; original.rel='noopener noreferrer'; content.append(original); } const hide = node('button','row-action','×'); hide.type='button'; hide.dataset.action='local-hide'; hide.title='Lokal ausblenden'; hide.setAttribute('aria-label',`Lokal ausblenden: ${article.title}`); hide.addEventListener('click',()=>{ui.selected.add(article.id); hideSelectedLocal();}); actions.append(hide); row.append(label,content,actions); return row; }
   for (const [action, symbol, description] of [['keep', '✓', 'Behalten'], ['remove', '−', 'Zum Entfernen vormerken'], ['skip', '↷', 'Überspringen'], ['clear', '↶', 'Entscheidung zurücksetzen']]) {
     if (action === 'clear' && !choice(article)) continue;
     const button = node('button', `row-action ${action}${choice(article) === action ? ' chosen' : ''}`, symbol);
@@ -369,9 +417,9 @@ function renderArticle(article) {
 }
 
 function renderSelection() {
-  const available = visibleArticles().filter((a) => !isRemoved(a));
+  const available = visibleArticles().filter((a) => (isLocalItem(a) || eligible(a)) && !isRemoved(a));
   const count = available.filter((a) => ui.selected.has(a.id)).length;
-  const filteredAvailable = filteredArticles().filter((a) => !isRemoved(a));
+  const filteredAvailable = filteredArticles().filter((a) => (isLocalItem(a) || eligible(a)) && !isRemoved(a));
   const filteredCount = filteredAvailable.filter((a) => ui.selected.has(a.id)).length;
   $('#select-all').checked = available.length > 0 && count === available.length;
   $('#select-all').indeterminate = count > 0 && count < available.length;
@@ -381,29 +429,25 @@ function renderSelection() {
   $('#select-filtered').disabled = ui.busy || !filteredAvailable.length;
   $('#selection-label').textContent = ui.selectionScope === 'filtered' && filteredCount ? `${filteredCount} gefiltert ausgewählt` : ui.selected.size ? `${ui.selected.size} ausgewählt` : 'Runde auswählen';
   $('#batch-actions').hidden = !ui.selected.size;
-  $$('[data-batch]').forEach((button) => { button.disabled = ui.busy; });
-  $('#open-selected').disabled = ui.busy || !ui.selected.size;
+  $$('[data-batch]').forEach((button) => { button.disabled = ui.busy || !data.articles.some(a=>ui.selected.has(a.id)); });
+  $('#open-selected').disabled = ui.busy || !allItems().some(a=>ui.selected.has(a.id) && localUrl(a));
   $('#share-selected').disabled = ui.busy || !ui.selected.size;
   $('#hermes-note').disabled = ui.busy || !ui.selected.size;
   $('#karakeep-selected').disabled = !data.articles.some((a) => ui.selected.has(a.id) && !karakeepDisabled(a));
+  for (const id of ['local-hide','local-undo']) { const el = document.getElementById(id); if (el) el.disabled = ui.busy || (id === 'local-hide' ? !ui.selected.size : !localUndo.size); }
+  const assign = document.getElementById('area-assign'); if (assign) assign.disabled = ui.busy || !allItems().some(a=>ui.selected.has(a.id) && areaKey(a));
   $('#karakeep-selected').title = 'Speichert die ausgewählten Links und merkt ihre Entfernung aus der jeweiligen Herkunft vor.';
 }
 
 function render() {
   if (!data) return;
   const overall = stats(data.articles.filter(eligible));
-  const percent = overall.total ? Math.round(overall.decided / overall.total * 1000) / 10 : 0;
-  $('#progress-percent').textContent = `${percent.toLocaleString('de-DE')} %`;
-  $('#overall-bar').style.width = `${percent}%`;
-  $('#overall-progress').textContent = `${overall.decided} von ${overall.total} entschieden · ${overall.open} noch offen`;
-  $('#keep-count').textContent = overall.keep;
-  $('#remove-count').textContent = overall.remove;
-  $('#done-count').textContent = remoteIds === null ? '–' : overall.removed;
+
   $('#pending-count').textContent = overall.remove;
   $('#saved-status').textContent = ui.busy ? 'Wird verarbeitet …' : '✓ Fortschritt lokal gespeichert';
   renderTopics();
   renderSourceOptions();
-  $('#collection-title').textContent = ui.topic || (ui.collection === 'x' ? 'X-Lesezeichen' : ui.collection === 'inoreader' ? 'Inoreader-Leseliste' : 'Alle Beiträge');
+  $('#collection-title').textContent = ui.topic || (ui.collection === 'x' ? 'X-Lesezeichen' : ui.collection === 'inoreader' ? 'Inoreader-Leseliste' : 'Alle Einträge');
   const group = stats(data.articles.filter((a) => eligible(a) && (!ui.topic || topic(a) === ui.topic)));
   $('#topic-progress').textContent = `${group.decided} von ${group.total} entschieden · ${group.open} offen${ui.topic ? ' in diesem Thema' : ' in deiner Sammlung'}`;
   $('#open-count').textContent = stats(scopedArticles()).open;
@@ -414,6 +458,10 @@ function render() {
   const filtered = filteredArticles();
   const visible = visibleArticles();
   $('#article-list').replaceChildren(...visible.map(renderArticle));
+  for (const [id,values] of [['area-filter', allItems().map(a=>cockpitAreas[areaKey(a)] || a.topic)], ['format-filter',allItems().map(a=>a.format || a.kind)]]) {
+    const select = document.getElementById(id), current = select.value;
+    select.replaceChildren(new Option('Alle',''), ...[...new Set(values.filter(Boolean))].sort().map(v=>new Option(v,v))); select.value=current;
+  }
   if (!visible.length) {
     const empty = node('div', 'empty-state');
     const isAllDone = !ui.search && !ui.source && ui.status === 'open' && group.open === 0;
@@ -539,11 +587,12 @@ async function saveSelectedToKarakeep() {
 }
 
 function buildHermesHandoff() {
-  const selected = data.articles.filter((article) => ui.selected.has(article.id));
+  const selected = [...data.articles.filter((article) => ui.selected.has(article.id)), ...cockpitLocal.filter(article => ui.selected.has(article.id))];
   const note = $('#hermes-note').value.trim();
-  const lines = ['Leseliste — ausgewählte Artikel zur Prüfung (manuell geteilt; nicht automatisch gesendet)', ''];
+  const lines = ['So. — ausgewählte Einträge zur Prüfung (manuell geteilt; nicht automatisch gesendet)', ''];
   if (note) lines.push(`Notiz: ${note}`, '');
   for (const article of selected) {
+    if (isLocalItem(article)) { lines.push(`- ${article.title}`, `  Quelle: ${article.sourceLabel}`, `  URL: ${localUrl(article) || 'keine sichere URL verfügbar'}`); if (article.excerpt) lines.push(`  Auszug: ${String(article.excerpt).slice(0,1500)}`); continue; }
     lines.push(`- ${displayTitle(article)}`, `  Quelle: ${source(article)} · Herkunft: ${origin(article) === 'x' ? 'X' : 'Inoreader'}`, `  URL: ${safeUrl(article.url) || 'keine sichere URL verfügbar'}`);
     const e = enrichment(article);
     const excerpt = e?.text || e?.summary || article.text || article.excerpt;
@@ -806,6 +855,11 @@ $('#all-topics').addEventListener('click', () => { ui.topic = ''; resetView(); }
 $$('[data-collection]').forEach(button => button.addEventListener('click', () => setCollection(button.dataset.collection)));
 $('#search').addEventListener('input', (event) => { ui.search = event.target.value.trim(); if (data) resetView(); });
 $('#source').addEventListener('change', (event) => { ui.source = event.target.value; resetView(); });
+for (const id of ['kind-filter','area-filter','format-filter']) document.getElementById(id)?.addEventListener('change', render);
+document.getElementById('area-assign')?.addEventListener('click', async () => { try { await assignAreas(allItems().filter(a=>ui.selected.has(a.id)).map(areaKey).filter(Boolean), document.getElementById('area-entry')?.value || ''); } catch(e) { notice(e.message,true); } });
+document.getElementById('local-hide')?.addEventListener('click',hideSelectedLocal);
+document.getElementById('local-undo')?.addEventListener('click',undoHiddenLocal);
+document.getElementById('posteo-load')?.addEventListener('click',async()=>{ try { const r=await fetch('/api/cockpit/posteo',{headers:{'X-Triage-Request':'1'}}); const payload=await r.json(); if(!r.ok) throw new Error(payload.error||'Posteo-Abruf fehlgeschlagen.'); const items=payload.items||[]; cockpitLocal=[...cockpitLocal.filter(a=>a.source!=='posteo'),...items.map(i=>({...i,id:`local:${i.id}`,originalId:i.id,localItem:true,url:i.url||'',title:i.title||'(ohne Titel)',sourceLabel:'Posteo',excerpt:i.detail||''}))]; items.forEach(i=>{if(i.lifeArea)cockpitAreas[i.id]=i.lifeArea;}); render(); } catch(e){notice(e.message,true);} });
 $$('[data-platform]').forEach(button => button.addEventListener('click', () => setPlatform(button.dataset.platform)));
 $('#page-size').addEventListener('change', (event) => { ui.pageSize = Number(event.target.value); resetView(); });
 $$('.status-tab').forEach((button) => button.addEventListener('click', () => { ui.status = button.dataset.status; resetView(); }));
@@ -821,7 +875,7 @@ $('#select-filtered').addEventListener('click', () => {
   ui.selectionScope = allSelected ? 'round' : 'filtered';
   render();
 });
-$$('[data-batch]').forEach((button) => button.addEventListener('click', () => saveDecision([...ui.selected], button.dataset.batch)));
+$$('[data-batch]').forEach((button) => button.addEventListener('click', () => saveDecision(data.articles.filter(a=>ui.selected.has(a.id)).map(a=>a.id), button.dataset.batch)));
 $$('[data-detail]').forEach((button) => button.addEventListener('click', () => saveDecision([ui.detailId], button.dataset.detail)));
 $('#previous-page').addEventListener('click', () => { ui.page -= 1; ui.selected.clear(); render(); });
 $('#next-page').addEventListener('click', () => { ui.page += 1; ui.selected.clear(); render(); });
@@ -830,7 +884,7 @@ $('#refresh').addEventListener('click', () => perform(() => request('/api/refres
 $('#source-inventory-inoreader-check').addEventListener('click', () => checkSourceInventory('inoreader'));
 $('#source-inventory-x-check').addEventListener('click', () => checkSourceInventory('x'));
 $('#open-selected').addEventListener('click', () => {
-  const urls = [...new Set(data.articles.filter((a) => ui.selected.has(a.id)).map((a) => safeUrl(a.url)).filter(Boolean))];
+  const urls = [...new Set([...data.articles.filter((a) => ui.selected.has(a.id)), ...cockpitLocal.filter(a => ui.selected.has(a.id))].map((a) => isLocalItem(a) ? localUrl(a) : safeUrl(a.url)).filter(Boolean))];
   let opened = 0;
   for (const url of urls) {
     const tab = window.open('about:blank', '_blank');
@@ -850,7 +904,7 @@ $('#share-selected').addEventListener('click', shareSelectedWithHermes);
 window.addEventListener('keydown', (event) => {
   if (event.key !== 'Delete' || event.repeat || event.isComposing || event.defaultPrevented || event.altKey || event.metaKey || event.ctrlKey || event.shiftKey || ui.busy || !ui.selected.size || document.querySelector('dialog[open]')) return;
   if (event.target.closest?.('input:not([type=checkbox]),textarea,select,[contenteditable]')) return;
-  event.preventDefault(); saveDecision([...ui.selected], 'remove');
+  event.preventDefault(); saveDecision(data.articles.filter(a=>ui.selected.has(a.id)).map(a=>a.id), 'remove');
 });
 $('#connect').addEventListener('click', connect);
 $('#x-connect').addEventListener('click', async () => {
@@ -899,7 +953,7 @@ $('#x-check-dialog').addEventListener('cancel',(event)=>{if(ui.busy)event.preven
 $('#confirm-sync').addEventListener('click', sync);
 
 $('#select-all').disabled = true;
-request('/api/state').then(applyState).catch((error) => {
+request('/api/state').then(async state => { applyState(state); await loadCockpit(); render(); }).catch((error) => {
   $('#saved-status').textContent = 'Stand nicht geladen';
   notice(error.message, true);
   const empty = node('div', 'empty-state');

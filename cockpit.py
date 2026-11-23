@@ -170,7 +170,7 @@ def global_sources(articles, saved_ids, decisions, x_content, posteo=None):
         format_name = article.get('format') or ('X post' if source == 'X' else 'Artikel')
         choice = decisions.get(article['id'], {}).get('choice')
         items.append(item('reading', article['id'], article.get('title') or 'Ohne Titel', 'reading',
-                          group=source, sourceLabel=source, topic=topic, format=format_name,
+                          readerId=article['id'], group=source, sourceLabel=source, topic=topic, format=format_name,
                           detail=text, url=article.get('url'), closed=choice in ('keep', 'remove'),
                           author=article.get('author') or content.get('author') or '',
                           xContent=content or None))
