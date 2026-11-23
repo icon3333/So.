@@ -49,7 +49,7 @@
       render();
     } catch (error) {
       root.replaceChildren();
-      const warning = document.createElement('p');
+      const warning = document.createElement('li');
       warning.setAttribute('role', 'alert');
       warning.textContent = error.message;
       root.append(warning);
@@ -63,24 +63,22 @@
   function render() {
     root.replaceChildren();
     for (const item of entries) {
-      const card = document.createElement('article');
+      const row = document.createElement('li');
       const state = document.createElement('span');
       const title = document.createElement('h2');
-      const message = document.createElement('p');
-      const checked = document.createElement('p');
+
       const button = document.createElement('button');
-      card.className = 'provider';
+      row.className = 'provider';
       state.className = `state${['connected','readable'].includes(item.state) ? ' verified' : ''}`;
       state.textContent = labels[item.state] || 'Status unbekannt';
       title.textContent = item.name;
-      message.textContent = item.message || 'Noch keine Details verfügbar.';
-      checked.className = 'checked-at';
-      checked.textContent = item.checkedAt ? `Zuletzt geprüft: ${item.checkedAt}` : 'Noch nicht geprüft';
+
       button.type = 'button';
       button.textContent = ['connected','readable','empty'].includes(item.state) ? 'Verwalten' : (item.kind === 'import' ? 'Import einrichten' : 'Verbinden');
       button.addEventListener('click', () => open(item));
-      card.append(state, title, message, checked, button);
-      root.append(card);
+      button.setAttribute('aria-label', `${item.name}: ${button.textContent}`);
+      row.append(title, state, button);
+      root.append(row);
     }
   }
 
@@ -88,8 +86,8 @@
     active = item;
     requestId += 1;
     document.querySelector('#dialog-title').textContent = item.name;
-    document.querySelector('#dialog-message').textContent = item.message ||
-      'Nur explizite Aktionen senden Daten an den lokalen Server.';
+    document.querySelector('#dialog-message').textContent = [item.message,
+      item.checkedAt ? `Zuletzt geprüft: ${item.checkedAt}` : 'Noch nicht geprüft'].filter(Boolean).join(' · ');
     status.textContent = '';
     fields.replaceChildren();
     for (const field of item.fields || []) fields.append(fieldInput(field));

@@ -85,13 +85,16 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   const cards = elements['#integrations'].children;
   assert.equal(cards.length, 3);
   assert.ok(descendants(cards[0]).some(item => item.textContent === 'Nicht eingerichtet'));
-  assert.ok(descendants(cards[0]).some(item => item.textContent.includes('Zuletzt geprüft: 2026-01-02')));
+  assert.match(html, /<ul id="integrations"/);
+  assert.match(html, /<h1 id="page-title">Integration<\/h1>/);
+  assert.ok(cards.every(row => row.tagName === 'li'));
   assert.ok(descendants(cards[0]).some(item => item.textContent === 'Verbinden'));
   assert.ok(descendants(cards[1]).some(item => item.textContent === 'Verwalten'));
 
   const xCardButton = descendants(cards[0]).find(item => item.tagName === 'button');
   xCardButton.listeners.click();
   assert.equal(elements['#provider-dialog'].open, true);
+  assert.match(elements['#dialog-message'].textContent, /Zuletzt geprüft: 2026-01-02/);
   const checkbox = descendants(elements['#provider-fields']).find(item => item.name === 'confirmCost');
   assert.equal(checkbox.type, 'checkbox');
   assert.equal(checkbox.checked, false);
