@@ -24,6 +24,8 @@ Eine lokale Übersicht für gespeicherte Links, To-dos und Projekte. In der Lese
 
 ## Lokal starten
 
+**Nur ausprobieren?** Im geklonten Repository `python3 demo.py` starten. Die Demo öffnet den Browser mit 49 Beispieldaten auf `http://127.0.0.1:18769/`, ohne Einrichtungsdialog oder echte Konten. Mit `Ctrl+C` beenden. Beim nächsten Start sind die Beispieldaten wieder frisch. Für Updates erst die Demo stoppen, dann `git pull --ff-only` auf dem gewünschten Branch ausführen. Unter macOS den Checkout direkt im persönlichen Ordner anlegen, nicht unter Downloads oder Desktop.
+
 Du brauchst Python 3.9 oder neuer auf macOS oder Linux und einen Browser. Der Server nutzt die Python-Standardbibliothek.
 
 ```sh
