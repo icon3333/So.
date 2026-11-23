@@ -229,6 +229,13 @@ def main():
             mobile = evaluate("({ width: document.documentElement.scrollWidth, viewport: innerWidth, first: !!document.querySelector('#items li'), focusable: [...document.querySelectorAll('button,select,input')].filter(e=>!e.disabled).length })")
             require(mobile["width"] <= 390 and mobile["viewport"] == 390, "390x844 layout overflows horizontally")
             require(evaluate("document.querySelector('#items li strong').getBoundingClientRect().bottom <= innerHeight") and mobile["first"] and mobile["focusable"] > 0, "mobile first row/actions not keyboard reachable")
+            evaluate("document.querySelector('a[href=\"/settings\"]').click()")
+            until("document.querySelectorAll('#integrations article').length === 7")
+            require(evaluate('document.documentElement.scrollWidth <= 390'), 'mobile settings overflow')
+            evaluate("Array.from(document.querySelectorAll('#integrations article')).find(el=>el.textContent.includes('Karakeep')).querySelector('button').click()")
+            until("document.querySelector('dialog[open] input[type=password]') !== null")
+            key('Escape', 27)
+            until("document.querySelector('dialog[open]') === null")
             print(json.dumps({"status": "PASS", "rows": len(got), "sources": len(api),
                               "desktop": baseline, "mobile": mobile}, ensure_ascii=False))
         finally:
@@ -237,7 +244,6 @@ def main():
                 except Exception: pass
                 ws.close()
             if chrome_proc:
-                chrome_proc.terminate()
                 try:
                     chrome_proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:

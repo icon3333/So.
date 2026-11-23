@@ -38,6 +38,10 @@ python3 server.py
 
 ## Quellen und Daten
 
+Im Cockpit und im Reader öffnet **Einstellungen → Integrationen** die Verbindungsdialoge. Ein Kontotest läuft erst auf Klick; bei X ist vorher eine Kostenfreigabe nötig. Inoreader nutzt den vorhandenen n8n-OAuth-Dienst, Tasks.org/Posteo den serverseitigen Leseadapter. Der Test ersetzt nicht die Einrichtung dieser Dienste.
+
+Keep-Takeout, Desktop-To-dos und Projekte bleiben Dateiimporte. Um im Dialog einen Ordner zu wählen, setze `LESELISTE_IMPORT_ROOT` auf einen separaten Importordner (nicht Checkout, Home oder Produktivdatenordner). Wähle darunter den relativen Pfad zu `Keep`, `To` oder `Projects`, teste ihn und speichere ihn erst danach. Ohne neue Konfiguration gelten die folgenden Standardpfade.
+
 - **Lokale Quellen:** Auf dem Mac liest die Übersicht `To` und `Projects` auf dem Desktop. Mit `LESELISTE_DESKTOP` lässt sich der Desktop-Pfad vorgeben. Für einen Google-Keep-Export nutzt So. standardmäßig `~/Downloads/Takeout/Keep`; überschreiben lässt sich der Pfad mit `LESELISTE_KEEP_EXPORT`. Tasks.org über Posteo benötigt einen separaten Adapter (`LESELISTE_POSTEO_ADAPTER`).
 - **Online-Quellen:** Der öffentliche Quellstand enthält keine Zugangsdaten oder privaten Workflows. Die `.example.invalid`-Adressen in [`n8n_connection.py`](n8n_connection.py) und [`karakeep_connection.py`](karakeep_connection.py) sind Platzhalter. Hinterlege echte HTTPS-Ursprünge und die n8n-Hostliste nur im privaten Deployment. Historische `hermes/`-Branches sind bereinigte Quellstände, keine lauffähigen Backups.
 - **Datenordner:** `SO_DATA_DIR` muss auf einen bestehenden, absoluten Ordner namens `prod_data` außerhalb des Checkouts zeigen. Er muss dir gehören, privat sein (z. B. Modus `0700`) und darf keine Symlinks enthalten. Ohne gültigen Pfad startet der Server nicht. Artikel-Snapshots, Bearbeitungsstatus, X-Lesezeichen und -Inhalte sowie OAuth-Clientdateien gehören dorthin, nicht ins Repository. Logs bleiben auf der Konsole oder beim Supervisor.

@@ -62,7 +62,6 @@ class KarakeepConnection:
         if not isinstance(api_key, str) or not api_key.strip() or len(api_key) > 4096 or any(ord(c) < 32 for c in api_key):
             raise StateError('Bitte einen gültigen Karakeep-Schlüssel eingeben.')
         with self.lock:
-            self._api_key = None
             result = request_json('/users/me', api_key.strip())
             if not isinstance(result.get('id'), str) or not result['id']:
                 raise StateError('Karakeep hat die Verbindung nicht bestätigt.', 502)
