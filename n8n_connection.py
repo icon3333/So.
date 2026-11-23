@@ -131,7 +131,7 @@ class Connection:
         self.tokens = {'access_token': result['access_token'], 'refresh_token': result.get('refresh_token'),
                        'expires_at': time.time() + max(0, int(result.get('expires_in', 300)) - 30)}
 
-    def call(self, operation, ids=None):
+    def call(self, operation, ids=None, entries_request=None):
         with self.lock:
             if not self.tokens:
                 raise StateError('Bitte zuerst mit n8n verbinden.', 401)
@@ -147,7 +147,11 @@ class Connection:
                     self.tokens = None
                     raise
             body = {'operation': operation}
-            if ids is not None:
+            if operation == 'entries':
+                if not isinstance(entries_request, dict):
+                    raise StateError('Ungültige Eintragsabfrage.', 400)
+                body.update(entries_request)
+            elif ids is not None:
                 body['ids'] = ids
             try:
                 result = request_json(self.webhook, body, {'Authorization': 'Bearer ' + self.tokens['access_token']})
@@ -155,6 +159,8 @@ class Connection:
                 if exc.status == 401:
                     self.tokens = None
                 raise
+            if operation == 'entries':
+                return result
             if result.get('complete') is not True or not isinstance(result.get('starredIds'), list) or not isinstance(result.get('checkedAt'), str):
                 raise StateError('Inoreader hat keinen vollständigen überprüfbaren Stand geliefert.', 502)
             return result
@@ -168,3 +174,16 @@ class Connection:
         if any(not isinstance(item, str) or not item for item in ids):
             raise StateError('Inoreader lieferte ungültige Lesezeichen-IDs.', 502)
         return {'count': len(set(ids)), 'coverage': 'complete', 'checkedAt': result['checkedAt']}
+
+    def read_entries_page(self, cursor=None, limit=100):
+        """Read one bounded page using the upgraded private workflow contract."""
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise StateError('Inoreader-Seitengröße muss zwischen 1 und 100 liegen.', 400)
+        result = self.call('entries', entries_request={'cursor': cursor, 'limit': limit})
+        if 'entries' not in result:
+            raise StateError('Der n8n-Inoreader-Workflow ist veraltet; bitte den Eintrags-Endpunkt einrichten.', 409)
+        if not isinstance(result.get('entries'), list):
+            raise StateError('Der n8n-Inoreader-Workflow lieferte ungültige Einträge.', 502)
+        if len(result['entries']) > limit:
+            raise StateError('Inoreader lieferte mehr Einträge als angefordert.', 502)
+        return result

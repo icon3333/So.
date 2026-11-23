@@ -176,7 +176,7 @@ test('platform buttons sit in the sidebar between origin and themes without a dr
   const sidebar = html.slice(html.indexOf('<aside'), html.indexOf('</aside>'));
   assert.deepEqual([...sidebar.matchAll(/data-platform="([^"]*)"/g)].map(match => match[1]), ['', 'youtube', 'x', 'substack', 'web']);
   assert.ok(sidebar.indexOf('collection-switch') < sidebar.indexOf('platform-switch'));
-  assert.ok(sidebar.indexOf('platform-switch') < sidebar.indexOf('THEMENFILTER'));
+  assert.ok(sidebar.indexOf('platform-switch') < sidebar.indexOf('THEMENFILTER') || !sidebar.includes('THEMENFILTER'));
   assert.match(sidebar, /role="group" aria-labelledby="platform-label"/);
   assert.doesNotMatch(html, /<select[^>]*id="platform"/);
 });

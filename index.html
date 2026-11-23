@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Leseliste · Inoreader &amp; X</title>
+  <title>So. — Sorta organized.</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
@@ -12,7 +13,8 @@
   <a class="skip-link" href="#main">Zum Inhalt</a>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Themen und Verbindung">
-      <a class="brand" href="/" aria-label="Leseliste Startseite"><span class="brand-mark" aria-hidden="true">l.</span><span>leseliste<span class="brand-sub">Weniger sammeln. Mehr Raum.</span></span></a>
+      <a class="brand" href="/" aria-label="So. Startseite"><strong>So.</strong><span class="brand-sub" lang="en">Sorta organized.</span></a>
+      <details class="scope-panel"><summary>Quellen und Themen</summary>
       <div class="scope-label" id="scope-label">HERKUNFT · SPEICHERORT</div>
       <div class="collection-switch" role="group" aria-labelledby="scope-label">
         <button class="active" type="button" data-collection="all" aria-pressed="true"><span class="origin-mark" aria-hidden="true">◎</span> Alle</button>
@@ -52,27 +54,33 @@
         <button id="x-disconnect" class="text-button full-width" type="button" hidden>Trennen</button>
       </section>
       </details>
+      <button type="button" class="button secondary" id="posteo-load">Posteo-Aufgaben laden</button>
+      </details>
     </aside>
     <main id="main" tabindex="-1">
-      <header class="topbar"><nav aria-label="Hauptnavigation"><a class="eyebrow" href="/cockpit">Zum Cockpit ↗</a><a class="eyebrow" href="/settings">Einstellungen</a></nav><span class="saved-status" id="saved-status">Lade gespeicherten Fortschritt …</span></header>
-      <section class="intro" aria-labelledby="page-title">
-        <div><div class="eyebrow accent">PLATZ FÜR DAS WESENTLICHE</div><h1 id="page-title">Deine Leseliste. Ein bisschen leichter.</h1><p>Was ist noch relevant? Entscheide in kleinen Runden.<br> Du bestimmst, was auf deiner Liste bleibt.</p></div>
-        <div class="progress-card"><div class="progress-card-top"><span>Dein Fortschritt</span><strong id="progress-percent">–</strong></div><div class="progress-track"><div id="overall-bar"></div></div><p id="overall-progress">Sammlung wird geladen …</p><div class="progress-legend"><span><i class="legend-dot keep-dot"></i><span id="keep-count">–</span> behalten</span><span><i class="legend-dot remove-dot"></i><span id="remove-count">–</span> vorgemerkt</span><span><i class="legend-dot done-dot"></i><span id="done-count">–</span> entfernt</span></div></div>
-      </section>
-      <section class="source-inventory" aria-labelledby="source-inventory-heading">
+      <header class="topbar"><h1>Arbeitsliste</h1><a class="eyebrow" href="/settings">Einstellungen</a></header>
+      <details class="inventory-panel"><summary>Quellenstand</summary><span id="saved-status" role="status"></span>
+<section class="source-inventory" aria-labelledby="source-inventory-heading">
         <div class="source-inventory-heading"><div><span class="eyebrow accent">DEINE ORIGINALQUELLEN</span><h2 id="source-inventory-heading">Gespeichert in</h2></div><span class="source-inventory-note">Unabhängig von Filtern und lokaler Triage</span></div>
         <div class="source-inventory-grid">
           <article class="source-inventory-card" aria-labelledby="source-inventory-x-title"><div class="source-inventory-card-top"><h3 id="source-inventory-x-title">X-Lesezeichen</h3><a href="https://x.com/i/bookmarks" target="_blank" rel="noopener noreferrer">In X öffnen ↗</a></div><div class="source-inventory-count" id="source-inventory-x-count">–</div><p id="source-inventory-x-status" aria-live="polite">Noch nicht geprüft</p><p id="source-inventory-x-time">Erfolgreiche Prüfung: unbekannt</p><p class="source-inventory-limit">API-Scan-Snapshot, kein Live-Check. Auch ein vollständiger API-Scan belegt keine vollständige historische Abdeckung.</p><button id="source-inventory-x-check" class="button secondary" type="button" aria-label="X-Lesezeichen: letzten API-Scan übernehmen">Letzten API-Scan übernehmen</button></article>
           <article class="source-inventory-card" aria-labelledby="source-inventory-inoreader-title"><div class="source-inventory-card-top"><h3 id="source-inventory-inoreader-title">Inoreader „Später lesen“</h3><a href="https://www.inoreader.com/read-later" target="_blank" rel="noopener noreferrer">In Inoreader öffnen ↗</a></div><div class="source-inventory-count" id="source-inventory-inoreader-count">–</div><p id="source-inventory-inoreader-status" aria-live="polite">Noch nicht geprüft</p><p id="source-inventory-inoreader-time">Erfolgreiche Prüfung: unbekannt</p><button id="source-inventory-inoreader-check" class="button secondary" type="button" aria-label="Inoreader Später lesen: jetzt prüfen" disabled>Jetzt prüfen</button></article>
         </div>
       </section>
+      </details>
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
       <section class="collection" aria-labelledby="collection-title">
         <div class="collection-heading"><div><h2 id="collection-title">Alle Themen</h2><p id="topic-progress">Die gespeicherte Sammlung</p></div><div class="heading-actions"><button id="undo" class="button secondary" disabled type="button"><span aria-hidden="true">↶</span> Rückgängig</button><button id="preview" class="button primary" disabled type="button">Entfernungen prüfen <span id="pending-count" class="button-count">0</span></button></div></div>
         <div class="filters"><label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Artikel durchsuchen</span><input id="search" type="search" placeholder="Titel, Website oder Auszug suchen …" autocomplete="off"></label><label class="source-field"><span class="sr-only">Website oder Publikation filtern</span><select id="source"><option value="">Alle Websites</option></select></label></div>
-        <div class="list-navigation"><div class="status-tabs" role="group" aria-label="Nach Entscheidung filtern"><button class="status-tab active" data-status="saved" type="button">Später lesen</button><button class="status-tab" data-status="open" type="button">Offen <span id="open-count">–</span></button><button class="status-tab" data-status="keep" type="button">Behalten</button><button class="status-tab" data-status="remove" type="button">Vorgemerkt</button><button class="status-tab" data-status="skip" type="button">Übersprungen</button><button class="status-tab" data-status="all" type="button">Alle inkl. entfernter</button></div><label class="round-size">Pro Runde <select id="page-size"><option value="10">10</option><option value="20">20</option><option value="500">Alle</option></select></label></div>
-        <div class="batch-bar"><label class="select-all"><input id="select-all" type="checkbox"><span id="selection-label">Runde auswählen</span></label><button id="select-filtered" class="batch-scope-button" type="button" disabled>Alle gefilterten auswählen</button><div id="batch-actions" class="batch-actions" hidden><button id="open-selected" type="button">Ausgewählte Originale öffnen ↗</button><label class="hermes-note-label" for="hermes-note">Notiz für Hermes <input id="hermes-note" type="text" maxlength="500" placeholder="Optionaler Kontext" disabled></label><button id="share-selected" type="button">Für Hermes kopieren/teilen</button><button id="karakeep-selected" type="button" title="Speichert die ausgewählten Artikel und merkt nach bestätigtem Erfolg ihre Entfernung aus Inoreader vor">Ausgewählte in Karakeep speichern</button><button data-batch="keep" type="button">Behalten</button><button data-batch="remove" type="button">Entfernen vormerken</button><button data-batch="skip" type="button">Überspringen</button><button data-batch="clear" type="button">Zurücksetzen</button></div><span id="result-count" class="result-count"></span></div>
-        <div id="article-list" class="article-list" aria-label="Artikel"><div class="empty-state"><span class="empty-icon" aria-hidden="true">···</span><h3>Deine Sammlung wird geladen</h3><p>Einen Moment bitte.</p></div></div>
+        <div class="list-navigation"><div class="status-tabs" role="group" aria-label="Nach Entscheidung filtern"><button class="status-tab active" data-status="saved" type="button">Arbeitsbestand</button><button class="status-tab" data-status="open" type="button">Offen <span id="open-count">–</span></button><button class="status-tab" data-status="keep" type="button">Behalten</button><button class="status-tab" data-status="remove" type="button">Vorgemerkt</button><button class="status-tab" data-status="skip" type="button">Übersprungen</button><button class="status-tab" data-status="all" type="button">Alle inkl. entfernter</button></div><label class="round-size">Pro Runde <select id="page-size"><option value="10">10</option><option value="20">20</option><option value="500">Alle</option></select></label></div>
+        <div class="batch-bar"><label class="select-all"><input id="select-all" type="checkbox"><span id="selection-label">Runde auswählen</span></label><button id="select-filtered" class="batch-scope-button" type="button" disabled>Alle gefilterten auswählen</button><details id="batch-actions" class="batch-actions" hidden><summary>Auswahl bearbeiten</summary><button id="open-selected" type="button">Ausgewählte Originale öffnen ↗</button><label class="hermes-note-label" for="hermes-note">Notiz für Hermes <input id="hermes-note" type="text" maxlength="500" placeholder="Optionaler Kontext" disabled></label><button id="share-selected" type="button">Für Hermes kopieren/teilen</button><button id="karakeep-selected" type="button" title="Speichert die ausgewählten Artikel und merkt nach bestätigtem Erfolg ihre Entfernung aus Inoreader vor">Ausgewählte in Karakeep speichern</button><button data-batch="keep" type="button">Behalten</button><button data-batch="remove" type="button">Entfernen vormerken</button><button data-batch="skip" type="button">Überspringen</button><button data-batch="clear" type="button">Zurücksetzen</button></details><span id="result-count" class="result-count"></span></div>
+        <div class="work-facets">
+          <label>Typ <select id="kind-filter"><option value="">Alle</option><option value="reading">Lesestoff</option><option value="task">Aufgaben</option><option value="project">Projekte</option></select></label>
+          <label>Bereich <select id="area-filter"><option value="">Alle</option></select></label>
+          <label>Format <select id="format-filter"><option value="">Alle</option></select></label>
+          <details><summary>Lokale Aktionen</summary><label>Lebensbereich <input id="area-entry" maxlength="80"></label><button type="button" id="area-assign">Auswahl zuordnen</button><button type="button" id="local-hide">Hier ausblenden</button><button type="button" id="local-undo">Ausblenden rückgängig</button></details>
+        </div>
+        <div id="article-list" class="article-list" aria-label="Arbeitsliste"><div class="empty-state"><h3>Einträge werden geladen …</h3></div></div>
         <footer class="list-footer"><p id="snapshot-label">Gespeicherter Ausgangsstand</p><div class="pagination"><button id="previous-page" class="button secondary" type="button" disabled aria-label="Vorherige Runde">←</button><span id="page-label">–</span><button id="next-page" class="button secondary" type="button" disabled aria-label="Nächste Runde">→</button></div></footer>
       </section>
       <p class="footnote">Entscheidungen werden lokal gespeichert. Inoreader-Einträge werden aus „Später lesen“, native X-Einträge aus X-Lesezeichen entfernt – nur nach separater Bestätigung.</p>

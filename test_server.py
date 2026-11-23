@@ -124,7 +124,6 @@ class SyncTests(unittest.TestCase):
             code, data, archive = (Path(tmp) / x for x in ('code', 'prod_data', 'archive_data'))
             for folder in (code, data, archive): folder.mkdir()
             (code / 'index.html').write_text('synthetic-code')
-            (code / 'cockpit.html').write_text('synthetic-overview')
             (data / 'articles.json').write_text(json.dumps({'fetchedAt':'synthetic', 'articles':[
                 {'id':'prod','title':'PROD_SENTINEL','ref':'p','url':'https://example.test'}], 'sameUrlGroups':[]}))
             (archive / 'articles.json').write_text(json.dumps({'fetchedAt':'archive', 'articles':[
@@ -151,17 +150,19 @@ class SyncTests(unittest.TestCase):
             self.assertNotIn('ARCHIVE_SENTINEL', state)
             for url in ('/articles.json', '/state.json', '/archive_data/articles.json'):
                 with self.assertRaises(Exception): request(url)
-            self.assertEqual(request('/').read(), b'synthetic-overview')
+            self.assertEqual(request('/').read(), b'synthetic-code')
             self.assertEqual(request('/reader').read(), b'synthetic-code')
+            self.assertEqual(request('/cockpit').read(), b'synthetic-code')
+            self.assertEqual(request('/cockpit.html').read(), b'synthetic-code')
             app.store.decide(0, ['prod'], 'keep')
             self.assertTrue((data / 'state.json').is_file())
-            self.assertEqual(set(code.iterdir()), {code / 'index.html', code / 'cockpit.html'})
+            self.assertEqual(set(code.iterdir()), {code / 'index.html'})
             self.assertEqual(list(archive.iterdir()), [archive / 'articles.json'])
 
-    def test_list_first_entry_and_reader_route_are_distinct(self):
+    def test_home_reader_and_cockpit_aliases_share_index_while_settings_is_preserved(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / 'cockpit.html').write_text('So overview')
+            (root / 'cockpit.html').write_text('Legacy cockpit')
             (root / 'index.html').write_text('Reader')
             app = App.__new__(App)
             app.root = root
@@ -175,9 +176,13 @@ class SyncTests(unittest.TestCase):
             def request(path):
                 req = urllib.request.Request(base + path, headers={'Host': '127.0.0.1:8769'})
                 return urllib.request.urlopen(req).read().decode()
-            self.assertEqual(request('/'), 'So overview')
-            self.assertEqual(request('/cockpit'), 'So overview')
+            (root / 'settings.html').write_text('Settings')
+            self.assertEqual(request('/'), 'Reader')
+            self.assertEqual(request('/index.html'), 'Reader')
             self.assertEqual(request('/reader'), 'Reader')
+            for alias in ('/cockpit', '/cockpit.html'):
+                self.assertEqual(request(alias), 'Reader')
+            self.assertEqual(request('/settings'), 'Settings')
 
     def test_production_launcher_rejects_missing_bad_or_checkout_data_directory(self):
         script = Path(__file__).with_name('server.py')

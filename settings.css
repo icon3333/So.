@@ -46,7 +46,7 @@ main {
 
 .intro {
   max-width: 690px;
-  margin: clamp(3rem, 9vw, 6rem) 0 2.5rem;
+  margin: 1.5rem 0 1rem;
 }
 
 .eyebrow {
@@ -59,7 +59,7 @@ main {
 
 h1 {
   margin: 0;
-  font-size: clamp(2.5rem, 8vw, 4.5rem);
+  font: 500 clamp(1.8rem, 4vw, 2.4rem)/1.1 Georgia, serif;
   letter-spacing: -.055em;
   line-height: 1.05;
 }
@@ -71,26 +71,26 @@ h1 {
 }
 
 .integrations {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
-  gap: 1rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border-block: 1px solid #ccd7cf;
 }
 
 .provider {
-  display: flex;
-  min-height: 240px;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 1.35rem;
-  border: 1px solid #dce3da;
-  border-radius: 16px;
-  background: rgb(255 255 255 / 88%);
-  box-shadow: 0 8px 24px rgb(25 48 36 / 5%);
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(9rem,auto) 9rem;
+  align-items: center;
+  gap: .75rem;
+  padding: .55rem .75rem;
+  background: #fbfcfa;
 }
+.provider + .provider { border-top: 1px solid #dce3da; }
+.provider .state { justify-self: start; }
 
 .provider h2 {
-  margin: .8rem 0 .15rem;
-  font-size: 1.35rem;
+  margin: 0;
+  font-size: 1rem;
   letter-spacing: -.025em;
 }
 
@@ -154,7 +154,9 @@ button {
 }
 
 .provider button {
-  margin-top: 1rem;
+  justify-self: end;
+  padding: .4rem .7rem;
+  font-size: .875rem;
 }
 
 button:hover:not(:disabled) {
@@ -254,7 +256,11 @@ dialog::backdrop {
 
 @media (max-width: 480px) {
   main { padding: 1.2rem; }
-  .intro { margin-top: 3rem; }
+  .provider { grid-template-columns: minmax(0,1fr) auto; gap: .15rem .5rem; }
+  .provider p { grid-column: 1 / -1; margin: 0; }
+  .provider.destination { border-left: 4px solid #8b9a70; }
+  .provider .state { grid-column: 1; }
+  .provider button { grid-column: 2; grid-row: 1 / 3; min-height: 44px; }
   .actions button { flex: 1; }
 }
 

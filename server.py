@@ -21,6 +21,7 @@ from triage_state import Store, StateError, now, atomic_json
 from x_content import fetch as fetch_x_content, is_x_article, x_post_id, load as load_x_content, save as save_x_content
 from x_bookmarks import XBookmarkCatalog
 from x_connection import XConnection
+from setup_action import setup_action
 
 
 def load_articles(root):
@@ -56,6 +57,8 @@ class App:
         # Legacy/test callers that omit data_root retain their historical co-located layout.
         self.data_root = Path(data_root).resolve() if data_root is not None else self.root
         self.snapshot, self.articles = load_articles(self.data_root)
+        self.inoreader_catalog_path = self.data_root / 'inoreader-entries.json'
+        self.merge_inoreader_catalog()
         self.x_bookmarks = XBookmarkCatalog(self.data_root / 'x-bookmarks.json')
         self.x_connection = XConnection(origin, self.x_bookmarks)
         self.articles.extend(self.x_bookmarks.articles())
@@ -99,9 +102,16 @@ class App:
 
     def integration_action(self, body):
         provider, action, fields = (body.get(key) for key in ('id', 'action', 'fields'))
-        if not isinstance(provider, str) or action not in ('connect', 'test') or not isinstance(fields, dict):
+        if not isinstance(provider, str) or action not in ('connect', 'test', 'setup', 'resume') or not isinstance(fields, dict):
             raise StateError('Ungültige Integrationsaktion.')
         with self.operation_lock:
+            if action == 'setup':
+                return setup_action(self, provider, fields)
+            if action == 'resume':
+                if provider not in ('inoreader', 'x'):
+                    raise StateError('Fortsetzen ist nur für OAuth-Integrationen verfügbar.')
+                from oauth_setup import oauth_setup
+                return oauth_setup(self, provider, fields, resume=True)
             if provider in self.accounts:
                 result = account_action(self, provider, action, fields)
                 if not result.get('authorizationUrl'):
@@ -154,6 +164,9 @@ class App:
 
     def cockpit_items(self):
         sources = local_sources(self)
+        posteo = getattr(self, '_setup_posteo_listing', None)
+        if posteo is not None:
+            sources['posteo'] = posteo
         payload = self.payload()
         sources = {**sources, **global_sources(payload['articles'], set(payload['savedIds']),
                                                 payload['state'].get('decisions', {}),
@@ -210,6 +223,26 @@ class App:
                 self.store.fail_source_inventory(source)
                 raise
             return self.payload()
+
+    def import_inoreader_entries(self, max_pages=5, page_size=100):
+        from inoreader_import import import_entries
+        with self.operation_lock:
+            result = import_entries(self.connection, self.inoreader_catalog_path, max_pages, page_size)
+            self.merge_inoreader_catalog()
+            self.refresh_catalog()
+            return result
+
+    def merge_inoreader_catalog(self):
+        if not self.inoreader_catalog_path.exists():
+            return
+        catalog = json.loads(self.inoreader_catalog_path.read_text())
+        by_ref = {a['ref']: a for a in self.articles if a.get('origin') == 'inoreader'}
+        for item in catalog['entries'].values():
+            previous = by_ref.get(item['ref'])
+            if previous is None:
+                self.articles.append(item)
+            else:
+                previous.update(item, id=previous['id'])
 
     def refresh_catalog(self):
         """Publish an atomically persisted additive page to the active review store."""
@@ -600,28 +633,18 @@ class Handler(BaseHTTPRequestHandler):
             self.safe_host()
             parsed = urllib.parse.urlsplit(self.path)
             path = parsed.path
-            if path == '/oauth/callback':
+            if path in ('/oauth/callback', '/oauth/x/callback'):
+                provider = 'x' if path == '/oauth/x/callback' else 'inoreader'
+                adapter = self.app.x_connection if provider == 'x' else self.app.connection
+                code, ok, label = 200, 'yes', 'Anmeldung abgeschlossen.'
                 try:
-                    self.app.connection.finish(urllib.parse.parse_qs(parsed.query))
-                    self.send_response(303)
-                    self.send_header('Location', '/')
-                    self.send_header('Cache-Control', 'no-store')
-                    self.send_header('Referrer-Policy', 'no-referrer')
-                    self.send_header('Content-Length', '0')
-                    self.end_headers()
+                    adapter.finish(urllib.parse.parse_qs(parsed.query))
                 except StateError as exc:
-                    self.send('<h1>Anmeldung nicht abgeschlossen</h1><p>' + html.escape(str(exc)) + '</p><a href="/">Zurück zur Leseliste</a>', exc.status, 'text/html; charset=utf-8')
-            elif path == '/oauth/x/callback':
-                try:
-                    self.app.x_connection.finish(urllib.parse.parse_qs(parsed.query))
-                    self.send_response(303)
-                    self.send_header('Location', '/')
-                    self.send_header('Cache-Control', 'no-store')
-                    self.send_header('Referrer-Policy', 'no-referrer')
-                    self.send_header('Content-Length', '0')
-                    self.end_headers()
-                except StateError as exc:
-                    self.send('<h1>X-Anmeldung nicht abgeschlossen</h1><p>' + html.escape(str(exc)) + '</p><a href="/">Zurück zur Leseliste</a>', exc.status, 'text/html; charset=utf-8')
+                    code, ok, label = exc.status, 'no', 'Anmeldung nicht abgeschlossen.'
+                self.send(f'<!doctype html><html lang="de"><meta charset="utf-8"><title>{label}</title>'
+                          f'<body data-provider="{provider}" data-ok="{ok}"><p>{label}</p>'
+                          '<a href="/">Zurück zu So.</a><script src="/oauth-result.js"></script></body></html>',
+                          code, 'text/html; charset=utf-8')
             elif path == '/api/settings':
                 self.send(self.app.integration_settings())
             elif path == '/api/state':
@@ -642,8 +665,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/sync/preview':
                 self.send(self.app.preview_removals())
 
-            elif path in ('/', '/index.html', '/reader', '/app.js', '/styles.css', '/cockpit', '/cockpit.html', '/cockpit.js', '/cockpit.css', '/settings', '/settings.js', '/settings.css'):
-                filename = {'/': 'cockpit.html', '/cockpit': 'cockpit.html', '/reader': 'index.html', '/settings': 'settings.html'}.get(path, path[1:])
+            elif path in ('/', '/index.html', '/reader', '/app.js', '/styles.css', '/cockpit', '/cockpit.html', '/cockpit.js', '/cockpit.css', '/settings', '/settings.js', '/settings.css', '/oauth-result.js'):
+                filename = {'/': 'index.html', '/cockpit': 'index.html', '/cockpit.html': 'index.html', '/reader': 'index.html', '/settings': 'settings.html'}.get(path, path[1:])
                 types = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8'}
                 self.send((self.app.root / filename).read_bytes(), content_type=types[Path(filename).suffix])
             elif path == '/favicon.ico':
