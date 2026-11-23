@@ -1,23 +1,63 @@
+<div align="center">
+
 # So.
-Lokale Web-App zum Durchgehen gespeicherter Links aus Inoreader und X: behalten, in Karakeep sichern oder gezielt entfernen.
 
-## Lokaler Betrieb
+**Sorta organized.**
 
-**Einstellungen → Integrationen** ist im Cockpit und im Reader erreichbar. Ein Kontotest wird erst auf Klick ausgeführt; X fragt vorher nach der Kostenfreigabe. Inoreader nutzt den vorhandenen n8n-OAuth-Dienst, Tasks.org/Posteo den serverseitig eingerichteten Leseadapter. Ein erfolgreicher Test ersetzt weder die Einrichtung dieser Dienste noch einen späteren Verfügbarkeitstest.
+Eine lokale Übersicht für gespeicherte Links, To-dos und Projekte. In der Leserunde entscheidest du, was auf der Liste bleibt, nach Karakeep wandert oder aus der Quelle entfernt werden soll.
 
-Keep-Takeout, Desktop-To-dos und Projekte bleiben Dateiimporte. Für eine Ordnerauswahl im Dialog `LESELISTE_IMPORT_ROOT` auf einen separaten Importordner setzen (nicht Checkout, Home oder Produktivdatenordner). Darunter relative Pfade zu `Keep`, `To` bzw. `Projects` wählen, testen und erst dann speichern. Ohne neue Konfiguration bleiben die bisherigen Standardpfade verfügbar. Die Hermes-Übergabe bleibt manuell.
+[Was So. kann](#was-so-kann) · [Lokal starten](#lokal-starten) · [Quellen und Daten](#quellen-und-daten)
 
-Die Adressen mit `.example.invalid` in `n8n_connection.py` und `karakeep_connection.py` sind absichtlich nicht erreichbar. Für echte Integrationen die HTTPS-Ursprünge und die n8n-Hostliste ausschließlich im privaten Deployment konfigurieren. Keine Schlüssel, persönlichen Workflow-Exporte oder Lesedaten in Git speichern. Die historischen `hermes/`-Branches sind bereinigte Quellstände, keine lauffertigen Backups.
+![So.-Übersicht mit Filtern für To-dos, Lesestoff und Projekte sowie einem Beispiel-Eintrag aus Inoreader](docs/assets/so-uebersicht.png)
 
-### Getrennte Datenablage
+<sub>Die So.-Übersicht mit erfundenen Beispieldaten.</sub>
 
-Der Code-Ordner enthält ausschließlich Anwendungscode und statische Assets. Für den Produktionsstart muss `SO_DATA_DIR` auf einen bestehenden, absoluten, vom Code-Ordner getrennten Datenordner zeigen. Ohne gültige Einstellung startet `server.py` nicht; es gibt keinen stillen Rückfall auf den Checkout. Die Anwendung legt dort Artikel-Snapshots, Status, X-Lesezeichen und -Inhalte sowie OAuth-Clientdateien ab. Logs des gestarteten Prozesses bleiben beim Supervisor/der Konsole; keine Logdateien werden im Checkout erzeugt.
+</div>
 
-Beispiel (Platzhalter ersetzen; keine privaten Pfade ins Repository schreiben):
+## Was So. kann
+
+| Bereich | Was du damit machst |
+| --- | --- |
+| **Übersicht** | To-dos, Lesestoff und Projekte nach Quelle, Lebensbereich oder Format filtern. Links gesammelt öffnen, Einträge zuordnen oder lokal ausblenden. |
+| **Leserunde** | Gespeicherte Links aus Inoreader und X durchgehen, zum späteren Lesen behalten, an Karakeep schicken oder zum Entfernen vormerken. Das Entfernen aus Inoreader oder X braucht eine separate Bestätigung. |
+| **Übergabe** | Ausgewählte Einträge als Textvorschau für Hermes zusammenstellen. So. sendet nichts automatisch. |
+
+## Lokal starten
+
+Du brauchst Python 3.9 oder neuer auf macOS oder Linux und einen Browser. Der Server nutzt die Python-Standardbibliothek.
 
 ```sh
-export SO_DATA_DIR=/absolute/path/to/private/prod_data  # vorhandener Ordner, Modus 0700
+git clone https://github.com/icon3333/So..git so
+cd so
+export SO_DATA_DIR="$HOME/.local/share/so/prod_data"
+mkdir -p -m 700 "$SO_DATA_DIR"
 python3 server.py
 ```
 
-Die historische `App(root, origin, state_path=None)`-Konstruktorform bleibt für Tests und bestehende lokale Aufrufer erhalten und verwendet weiterhin `root` als Datenordner. Der Produktions-CLI-Einstieg verlangt dagegen explizit `SO_DATA_DIR`. HTTP-Statische Dateien werden ausschließlich über eine feste Allowlist aus dem Code-Ordner ausgeliefert; Datenordner und Archive sind keine statischen Quellen.
+Öffne [127.0.0.1:8769](http://127.0.0.1:8769/). Die Übersicht ist die Startseite; die Leserunde findest du unter [`/reader`](http://127.0.0.1:8769/reader). Ohne lokale Quellen oder importierte Daten kann die Liste leer sein.
+
+## Quellen und Daten
+
+Im Cockpit und im Reader öffnet **Einstellungen → Integrationen** die Verbindungsdialoge. Ein Kontotest läuft erst auf Klick; bei X ist vorher eine Kostenfreigabe nötig. Inoreader nutzt den vorhandenen n8n-OAuth-Dienst, Tasks.org/Posteo den serverseitigen Leseadapter. Der Test ersetzt nicht die Einrichtung dieser Dienste.
+
+Keep-Takeout, Desktop-To-dos und Projekte bleiben Dateiimporte. Um im Dialog einen Ordner zu wählen, setze `LESELISTE_IMPORT_ROOT` auf einen separaten Importordner (nicht Checkout, Home oder Produktivdatenordner). Wähle darunter den relativen Pfad zu `Keep`, `To` oder `Projects`, teste ihn und speichere ihn erst danach. Ohne neue Konfiguration gelten die folgenden Standardpfade.
+
+- **Lokale Quellen:** Auf dem Mac liest die Übersicht `To` und `Projects` auf dem Desktop. Mit `LESELISTE_DESKTOP` lässt sich der Desktop-Pfad vorgeben. Für einen Google-Keep-Export nutzt So. standardmäßig `~/Downloads/Takeout/Keep`; überschreiben lässt sich der Pfad mit `LESELISTE_KEEP_EXPORT`. Tasks.org über Posteo benötigt einen separaten Adapter (`LESELISTE_POSTEO_ADAPTER`).
+- **Online-Quellen:** Der öffentliche Quellstand enthält keine Zugangsdaten oder privaten Workflows. Die `.example.invalid`-Adressen in [`n8n_connection.py`](n8n_connection.py) und [`karakeep_connection.py`](karakeep_connection.py) sind Platzhalter. Hinterlege echte HTTPS-Ursprünge und die n8n-Hostliste nur im privaten Deployment. Historische `hermes/`-Branches sind bereinigte Quellstände, keine lauffähigen Backups.
+- **Datenordner:** `SO_DATA_DIR` muss auf einen bestehenden, absoluten Ordner namens `prod_data` außerhalb des Checkouts zeigen. Er muss dir gehören, privat sein (z. B. Modus `0700`) und darf keine Symlinks enthalten. Ohne gültigen Pfad startet der Server nicht. Artikel-Snapshots, Bearbeitungsstatus, X-Lesezeichen und -Inhalte sowie OAuth-Clientdateien gehören dorthin, nicht ins Repository. Logs bleiben auf der Konsole oder beim Supervisor.
+
+<details>
+<summary>Entwicklung und Tests</summary>
+
+```sh
+python3 -m unittest discover
+node --test test_*.cjs
+```
+
+Die historische Konstruktorform `App(root, origin, state_path=None)` verwendet für Tests und bestehende lokale Aufrufer weiterhin `root` als Datenordner. Der CLI-Start verlangt dagegen `SO_DATA_DIR`. Der HTTP-Server liefert nur ausdrücklich freigegebene statische Dateien aus dem Code-Ordner aus, keine Datenordner oder Archive.
+
+</details>
+
+## Lizenz
+
+Im Repository liegt keine Lizenzdatei.
