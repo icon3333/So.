@@ -13,6 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from cockpit import local_sources, posteo_source, global_sources
+from account_settings import account_action, account_status
+from import_settings import import_action, import_status
 from n8n_connection import Connection
 from karakeep_connection import KarakeepConnection
 from triage_state import Store, StateError, now, atomic_json
@@ -72,6 +74,46 @@ class App:
         self.removal_confirmations = {}
         self.area_path = self.data_root / 'cockpit-areas.json'
         self.posteo_ids = set()
+        self.account_checks = {}
+
+    accounts = {'inoreader': 'Inoreader über n8n', 'x': 'X', 'karakeep': 'Karakeep', 'tasksorg': 'Tasks.org / Posteo'}
+    imports = {'keep': 'Google Keep (Takeout)', 'to': 'Desktop-To-dos', 'projects': 'Projekte'}
+
+    def integration_settings(self):
+        entries = []
+        for provider, name in self.accounts.items():
+            status = account_status(self, provider)
+            from n8n_connection import ISSUER
+            probe = self.account_checks.get(provider, {})
+            adapter = {'inoreader':self.connection, 'karakeep':self.karakeep, 'x':self.x_connection}.get(provider)
+            if adapter and not adapter.status().get('connected') and probe.get('state') != 'error':
+                probe = {'state':'unconfigured', 'message':'Nicht verbunden.'}
+            entries.append(status | probe | {'id':provider, 'name':name, 'kind':'account',
+                'authOrigin':{'inoreader':ISSUER,'x':'https://x.com'}.get(provider)})
+        for provider, name in self.imports.items():
+            status = import_status(self, provider)
+            field = {'name': 'path', 'label': 'Ordner unter dem freigegebenen Importverzeichnis',
+                     'type': 'text', 'value': status.get('path') or ''}
+            entries.append(dict(status, id=provider, name=name, kind='import', fields=[field]))
+        return {'integrations': entries}
+
+    def integration_action(self, body):
+        provider, action, fields = (body.get(key) for key in ('id', 'action', 'fields'))
+        if not isinstance(provider, str) or action not in ('connect', 'test') or not isinstance(fields, dict):
+            raise StateError('Ungültige Integrationsaktion.')
+        with self.operation_lock:
+            if provider in self.accounts:
+                result = account_action(self, provider, action, fields)
+                if not result.get('authorizationUrl'):
+                    result['checkedAt'] = now()
+                    if not (provider == 'karakeep' and action == 'test' and fields.get('apiKey')):
+                        self.account_checks[provider] = {k:result[k] for k in ('state','message','checkedAt')}
+                else:
+                    self.account_checks.pop(provider, None)
+                return result
+            if provider in self.imports and set(fields) <= {'path'} and isinstance(fields.get('path'), str):
+                return import_action(self, provider, action, fields)
+        raise StateError('Unbekannte Integration oder ungültige Felder.')
 
     def cockpit_areas(self):
         try:
@@ -111,7 +153,7 @@ class App:
         return source
 
     def cockpit_items(self):
-        sources = local_sources()
+        sources = local_sources(self)
         payload = self.payload()
         sources = {**sources, **global_sources(payload['articles'], set(payload['savedIds']),
                                                 payload['state'].get('decisions', {}),
@@ -580,6 +622,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                 except StateError as exc:
                     self.send('<h1>X-Anmeldung nicht abgeschlossen</h1><p>' + html.escape(str(exc)) + '</p><a href="/">Zurück zur Leseliste</a>', exc.status, 'text/html; charset=utf-8')
+            elif path == '/api/settings':
+                self.send(self.app.integration_settings())
             elif path == '/api/state':
                 self.send(self.app.payload())
             elif path == '/api/cockpit':
@@ -598,8 +642,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/sync/preview':
                 self.send(self.app.preview_removals())
 
-            elif path in ('/', '/index.html', '/reader', '/app.js', '/styles.css', '/cockpit', '/cockpit.html', '/cockpit.js', '/cockpit.css'):
-                filename = {'/': 'cockpit.html', '/cockpit': 'cockpit.html', '/reader': 'index.html'}.get(path, path[1:])
+            elif path in ('/', '/index.html', '/reader', '/app.js', '/styles.css', '/cockpit', '/cockpit.html', '/cockpit.js', '/cockpit.css', '/settings', '/settings.js', '/settings.css'):
+                filename = {'/': 'cockpit.html', '/cockpit': 'cockpit.html', '/reader': 'index.html', '/settings': 'settings.html'}.get(path, path[1:])
                 types = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8'}
                 self.send((self.app.root / filename).read_bytes(), content_type=types[Path(filename).suffix])
             elif path == '/favicon.ico':
@@ -625,7 +669,9 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise StateError('Ungültige Anfrage.')
             path = urllib.parse.urlsplit(self.path).path
-            if path == '/api/cockpit/areas':
+            if path == '/api/settings/action':
+                self.send(self.app.integration_action(body))
+            elif path == '/api/cockpit/areas':
                 self.app.assign_cockpit_area(body.get('ids'), body.get('lifeArea'))
                 self.send({'ok': True})
             elif path == '/api/fetch-x':

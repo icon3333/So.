@@ -3,6 +3,10 @@ Lokale Web-App zum Durchgehen gespeicherter Links aus Inoreader und X: behalten,
 
 ## Lokaler Betrieb
 
+**Einstellungen → Integrationen** ist im Cockpit und im Reader erreichbar. Ein Kontotest wird erst auf Klick ausgeführt; X fragt vorher nach der Kostenfreigabe. Inoreader nutzt den vorhandenen n8n-OAuth-Dienst, Tasks.org/Posteo den serverseitig eingerichteten Leseadapter. Ein erfolgreicher Test ersetzt weder die Einrichtung dieser Dienste noch einen späteren Verfügbarkeitstest.
+
+Keep-Takeout, Desktop-To-dos und Projekte bleiben Dateiimporte. Für eine Ordnerauswahl im Dialog `LESELISTE_IMPORT_ROOT` auf einen separaten Importordner setzen (nicht Checkout, Home oder Produktivdatenordner). Darunter relative Pfade zu `Keep`, `To` bzw. `Projects` wählen, testen und erst dann speichern. Ohne neue Konfiguration bleiben die bisherigen Standardpfade verfügbar. Die Hermes-Übergabe bleibt manuell.
+
 Die Adressen mit `.example.invalid` in `n8n_connection.py` und `karakeep_connection.py` sind absichtlich nicht erreichbar. Für echte Integrationen die HTTPS-Ursprünge und die n8n-Hostliste ausschließlich im privaten Deployment konfigurieren. Keine Schlüssel, persönlichen Workflow-Exporte oder Lesedaten in Git speichern. Die historischen `hermes/`-Branches sind bereinigte Quellstände, keine lauffertigen Backups.
 
 ### Getrennte Datenablage

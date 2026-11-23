@@ -233,6 +233,17 @@ class XConnection:
             ledger.account_id, ledger.session_id = self.account['id'], id(self.tokens)
             return ledger
 
+    def verify_identity(self, approval):
+        with self.lock:
+            ledger = self.new_operation(approval)
+            if self.tokens is None or self.account is None:
+                raise StateError('X ist nicht verbunden.', 401)
+            ledger.reserve({'users': 1})
+            response = _safe_json_request(API + '/2/users/me?user.fields=id',
+                headers={'Authorization': 'Bearer ' + self.tokens['access_token']})
+            if response.get('errors') or (response.get('data') or {}).get('id') != self.account['id']:
+                raise StateError('X hat das angemeldete Konto nicht bestätigt.', 502)
+
     def bookmarks_page(self, ledger, account_id, cursor=None, max_results=100, include_author=True, verification=False):
         if type(max_results) is not int or not 1 <= max_results <= 100:
             raise StateError('X-Lesezeichenseiten müssen 1 bis 100 Posts anfordern.', 400)
