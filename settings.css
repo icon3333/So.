@@ -257,6 +257,8 @@ dialog::backdrop {
 @media (max-width: 480px) {
   main { padding: 1.2rem; }
   .provider { grid-template-columns: minmax(0,1fr) auto; gap: .15rem .5rem; }
+  .provider p { grid-column: 1 / -1; margin: 0; }
+  .provider.destination { border-left: 4px solid #8b9a70; }
   .provider .state { grid-column: 1; }
   .provider button { grid-column: 2; grid-row: 1 / 3; min-height: 44px; }
   .actions button { flex: 1; }

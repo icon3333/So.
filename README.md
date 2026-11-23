@@ -38,9 +38,14 @@ python3 server.py
 
 Öffne [127.0.0.1:8769](http://127.0.0.1:8769/). Die Startseite und [`/reader`](http://127.0.0.1:8769/reader) zeigen dieselbe integrierte Liste. Die früheren Cockpit-Adressen `/cockpit` und `/cockpit.html` führen ebenfalls dorthin. Einstellungen bleiben unter [`/settings`](http://127.0.0.1:8769/settings). Ohne lokale Quellen oder importierte Daten kann die Liste leer sein.
 
-## Quellen und Daten
+## Sources / settings setup
 
-In der Liste öffnet **Einstellungen → Integrationen** die Verbindungsdialoge. Ein Kontotest läuft erst auf Klick; bei X ist vorher eine Kostenfreigabe nötig. Inoreader nutzt den vorhandenen n8n-OAuth-Dienst, Tasks.org/Posteo den serverseitigen Leseadapter. Der Test ersetzt nicht die Einrichtung dieser Dienste.
+The settings page has one **Set up** action for each source, including Karakeep. OAuth opens a popup synchronously from that click. The same-origin callback sends `{type:'so-setup-callback', provider:'x'|'inoreader', ok:true|false}` to the opener; the page checks origin and popup identity and resumes the already-started operation once on success. It does not store secrets or automatically trigger imports/writes. X's paid identity check and any subsequent import costs require explicit cost consent. The approved import limits (max pages, posts per page, USD budget), author lookup option, and restart choice are captured at the resume click and enforced by the importer. Invalid or missing limits are rejected before OAuth or import. Karakeep's destination test does not persist its API key.
+
+Private prerequisites are not included in this public repository: X needs a Developer App and public OAuth client ID; Inoreader needs its private trusted n8n OAuth setup; Tasks.org/Posteo needs its separately installed server-side adapter. File imports need available local folders. Enable browser popups if the OAuth window is blocked.
+
+
+## Quellen und Daten
 
 Keep-Takeout, Desktop-To-dos und Projekte bleiben Dateiimporte. Um im Dialog einen Ordner zu wählen, setze `LESELISTE_IMPORT_ROOT` auf einen separaten Importordner (nicht Checkout, Home oder Produktivdatenordner). Wähle darunter den relativen Pfad zu `Keep`, `To` oder `Projects`, teste ihn und speichere ihn erst danach. Ohne neue Konfiguration gelten die folgenden Standardpfade.
 

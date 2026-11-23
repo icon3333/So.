@@ -23,7 +23,12 @@ def account_status(app, provider):
     if provider == 'x':
         return {'state': 'untested', 'message': 'X-Status wird nur durch OAuth-Identitätsprüfung bestätigt.',
                 'fields': [{'name': 'clientId', 'type': 'text', 'label': 'Öffentliche X OAuth Client-ID', 'value': getattr(app.x_connection, 'client_id', None) or ''},
-                           {'name': 'confirmCost', 'type': 'checkbox', 'label': 'Kostenpflichtigen Identitätsabruf (bis zu 0,01 USD) ausdrücklich bestätigen', 'value': False}]}
+                           {'name': 'maxPages', 'type': 'number', 'label': 'Maximale X-Importseiten (1–1000)', 'value': 10},
+                           {'name': 'maxResults', 'type': 'number', 'label': 'Maximale Posts je Seite (1–100)', 'value': 100},
+                           {'name': 'maxUsd', 'type': 'number', 'label': 'Maximales X-Importbudget in USD', 'value': 5.0},
+                           {'name': 'includeAuthors', 'type': 'checkbox', 'label': 'Autor-Ressourcen einschließen (zusätzliche Kosten)', 'value': True},
+                           {'name': 'restart', 'type': 'checkbox', 'label': 'Unvollständigen X-Import ausdrücklich neu starten', 'value': False},
+                           {'name': 'confirmCost', 'type': 'checkbox', 'label': 'Kostenpflichtiger X-OAuth-Identitätscheck (bis zu 0,01 USD) bestätigen; für Import ggf. zusätzliche Kosten bis zu den gesetzten Limits', 'value': False}]}
     if provider == 'karakeep':
         return {'state': 'untested', 'message': 'Karakeep-Status wird nur durch einen ausdrücklichen Test bestätigt.',
                 'fields': [{'name': 'apiKey', 'type': 'password', 'label': 'Karakeep API-Schlüssel', 'value': ''}]}
