@@ -2,7 +2,7 @@
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const ui = { collection: 'all', platform: '', topic: '', source: '', search: '', status: 'saved', page: 0, pageSize: 10, selected: new Set(), busy: false, detailId: null, preview: null };
+const ui = { kind: '', collection: 'all', platform: '', topic: '', source: '', search: '', status: 'saved', page: 0, pageSize: 10, selected: new Set(), busy: false, detailId: null, preview: null };
 let data = null;
 let remoteIds = null;
 let loginTimer = null;
@@ -13,7 +13,7 @@ let karakeepOpener = null;
 function captureFocus() {
   const active = document.activeElement;
   const row = active?.closest('.article-row');
-  if (row) return { article: row.dataset.id, action: active.dataset.action || 'title', index: [...row.parentElement.children].indexOf(row) };
+  if (row) return { article: row.dataset.id, action: active.dataset.action || 'title', more: Boolean(active.closest('.row-more')), index: [...row.parentElement.children].indexOf(row) };
   if (active?.dataset.topic) return { topic: active.dataset.topic };
   if (active?.id) return { id: active.id };
   return null;
@@ -26,6 +26,7 @@ function restoreFocus(target) {
     const rows = $$('.article-row');
     const row = rows.find((item) => item.dataset.id === target.article) || rows[Math.min(target.index, rows.length - 1)];
     element = row && [...row.querySelectorAll('button,input,a')].find((item) => item.dataset.action === target.action && !item.disabled);
+    if (target.more) element = row?.querySelector('.row-more summary');
     element ||= row?.querySelector('.article-title');
     if (!element) { element = $('#collection-title'); element.tabIndex = -1; }
   } else if (target.topic) element = $$('.topic-button').find((item) => item.dataset.topic === target.topic);
@@ -155,7 +156,7 @@ function isLocalItem(a) { return a?.localItem === true; }
 function localUrl(a) { try { const u = new URL(a.url); return ['http:', 'https:'].includes(u.protocol) ? u.href : ''; } catch { return ''; } }
 function matchesCommonFilters(a) {
   const value = id => document.querySelector('#'+id)?.value || '';
-  return (!value('kind-filter') || (a.kind || 'reading') === value('kind-filter')) &&
+  return (!ui.kind || (a.kind || 'reading') === ui.kind) &&
     (!value('area-filter') || (cockpitAreas[areaKey(a)] || a.topic) === value('area-filter')) &&
     (!value('format-filter') || (a.format || a.kind) === value('format-filter'));
 }
@@ -375,13 +376,14 @@ function renderArticle(article) {
   const excerpt = enrichment(article)?.summary || enrichment(article)?.text || article.excerpt;
   if (excerpt) content.append(node('p', 'article-excerpt', excerpt.replace(/\s+/g, ' ').trim()));
   const url = isLocalItem(article) ? localUrl(article) : safeUrl(article.url);
+  const links = node('div', 'row-links');
   if (url && !isLocalItem(article)) {
     const original = node('a', 'button secondary row-original', 'Original öffnen ↗');
     original.href = url;
     original.target = '_blank';
     original.rel = 'noopener noreferrer';
     original.dataset.action = 'original';
-    content.append(original);
+    links.append(original);
     const save = node('button', 'button keep-button row-karakeep', karakeepLabel(article));
     save.type = 'button';
     save.dataset.action = 'karakeep';
@@ -389,13 +391,17 @@ function renderArticle(article) {
     save.setAttribute('aria-label', `${karakeepLabel(article)}: ${displayTitle(article)}`);
     save.disabled = karakeepDisabled(article);
     save.addEventListener('click', () => saveToKarakeep(article.id));
-    content.append(save);
+    links.append(save);
   }
   const actions = node('div', 'row-actions');
   if (isLocalItem(article)) { if (url) { const original=node('a','button secondary row-original','Original öffnen ↗'); original.href=url; original.target='_blank'; original.rel='noopener noreferrer'; content.append(original); } const hide = node('button','row-action','×'); hide.type='button'; hide.dataset.action='local-hide'; hide.title='Lokal ausblenden'; hide.setAttribute('aria-label',`Lokal ausblenden: ${article.title}`); hide.addEventListener('click',()=>{ui.selected.add(article.id); hideSelectedLocal();}); actions.append(hide); row.append(label,content,actions); return row; }
-  for (const [action, symbol, description] of [['keep', '✓', 'Behalten'], ['remove', '−', 'Zum Entfernen vormerken'], ['skip', '↷', 'Überspringen'], ['clear', '↶', 'Entscheidung zurücksetzen']]) {
+  const more = node('details', 'row-more');
+  const summary = node('summary', '', 'Weitere');
+  summary.setAttribute('aria-label', `Weitere Aktionen: ${displayTitle(article)}`);
+  const secondary = node('div', 'row-secondary');
+  for (const [action, description] of [['keep', 'Behalten'], ['remove', 'Entfernen vormerken'], ['skip', 'Überspringen'], ['clear', 'Entscheidung zurücksetzen']]) {
     if (action === 'clear' && !choice(article)) continue;
-    const button = node('button', `row-action ${action}${choice(article) === action ? ' chosen' : ''}`, symbol);
+    const button = node('button', `row-action ${action}${choice(article) === action ? ' chosen' : ''}`, description);
     button.type = 'button';
     button.dataset.action = action;
     button.title = action === 'remove' ? `Erst nach „Entfernungen prüfen“ und deiner Bestätigung aus ${destinationLabel(article)} entfernen` : description;
@@ -403,15 +409,18 @@ function renderArticle(article) {
     if (action !== 'clear') button.setAttribute('aria-pressed', String(choice(article) === action));
     button.disabled = ui.busy || isRemoved(article);
     button.addEventListener('click', () => saveDecision([article.id], action));
-    actions.append(button);
+    (action === 'keep' ? actions : secondary).append(button);
   }
-  const details = node('button', 'row-action details', '›');
+  const details = node('button', 'row-action details', 'Details');
   details.type = 'button';
   details.dataset.action = 'details';
   details.title = 'Details öffnen';
   details.setAttribute('aria-label', `Details öffnen: ${displayTitle(article)}`);
   details.addEventListener('click', () => openDetails(article.id));
   actions.append(details);
+  if (links.childElementCount) secondary.append(links);
+  more.append(summary, secondary);
+  actions.append(more);
   row.append(label, content, actions);
   return row;
 }
@@ -428,6 +437,7 @@ function renderSelection() {
   $('#select-filtered').textContent = allFilteredSelected ? 'Gefilterte Auswahl aufheben' : 'Alle gefilterten auswählen';
   $('#select-filtered').disabled = ui.busy || !filteredAvailable.length;
   $('#selection-label').textContent = ui.selectionScope === 'filtered' && filteredCount ? `${filteredCount} gefiltert ausgewählt` : ui.selected.size ? `${ui.selected.size} ausgewählt` : 'Runde auswählen';
+  $('#selection-count').textContent = ui.selected.size ? ` (${ui.selected.size})` : '';
   $('#batch-actions').hidden = !ui.selected.size;
   $$('[data-batch]').forEach((button) => { button.disabled = ui.busy || !data.articles.some(a=>ui.selected.has(a.id)); });
   $('#open-selected').disabled = ui.busy || !allItems().some(a=>ui.selected.has(a.id) && localUrl(a));
@@ -447,7 +457,9 @@ function render() {
   $('#saved-status').textContent = ui.busy ? 'Wird verarbeitet …' : '✓ Fortschritt lokal gespeichert';
   renderTopics();
   renderSourceOptions();
-  $('#collection-title').textContent = ui.topic || (ui.collection === 'x' ? 'X-Lesezeichen' : ui.collection === 'inoreader' ? 'Inoreader-Leseliste' : 'Alle Einträge');
+  const kindLabels = { reading: 'Lesestoff', task: 'Aufgaben', project: 'Projekte' };
+  $('#collection-title').textContent = ui.topic || (ui.collection === 'x' ? 'X-Lesezeichen' : ui.collection === 'inoreader' ? 'Inoreader-Leseliste' : kindLabels[ui.kind] || 'Alle Einträge');
+  $$('[data-kind-view]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.kindView === ui.kind)));
   const group = stats(data.articles.filter((a) => eligible(a) && (!ui.topic || topic(a) === ui.topic)));
   $('#topic-progress').textContent = `${group.decided} von ${group.total} entschieden · ${group.open} offen${ui.topic ? ' in diesem Thema' : ' in deiner Sammlung'}`;
   $('#open-count').textContent = stats(scopedArticles()).open;
@@ -468,7 +480,9 @@ function render() {
     empty.append(node('span', 'empty-icon', isAllDone ? '✓' : '⌕'), node('h3', '', isAllDone ? 'Ein Stück leichter.' : 'Hier gibt es gerade keine Artikel.'), node('p', '', isAllDone ? 'Alles in dieser Ansicht ist entschieden. Vorgemerkte Entfernungen kannst du oben prüfen und anschließend in Inoreader bestätigen.' : 'Wähle ein anderes Thema, ändere den Filter oder verkürze deine Suche.'));
     $('#article-list').append(empty);
   }
-  $('#result-count').textContent = `${filtered.length} Artikel`;
+  const filterCount = [ui.source, $('#area-filter').value, $('#format-filter').value].filter(Boolean).length;
+  $('#facet-count').textContent = filterCount ? ` (${filterCount})` : '';
+  $('#result-count').textContent = `${filtered.length} ${filtered.length === 1 ? 'Eintrag' : 'Einträge'}`;
   const pages = Math.max(1, Math.ceil(filtered.length / ui.pageSize));
   $('#page-label').textContent = `Runde ${ui.page + 1} von ${pages}`;
   $('#previous-page').disabled = ui.page === 0 || ui.busy;
@@ -855,7 +869,14 @@ $('#all-topics').addEventListener('click', () => { ui.topic = ''; resetView(); }
 $$('[data-collection]').forEach(button => button.addEventListener('click', () => setCollection(button.dataset.collection)));
 $('#search').addEventListener('input', (event) => { ui.search = event.target.value.trim(); if (data) resetView(); });
 $('#source').addEventListener('change', (event) => { ui.source = event.target.value; resetView(); });
-for (const id of ['kind-filter','area-filter','format-filter']) document.getElementById(id)?.addEventListener('change', render);
+$$('[data-kind-view]').forEach((button) => button.addEventListener('click', () => {
+  ui.kind = button.dataset.kindView;
+  ui.platform = '';
+  $('#area-filter').value = '';
+  $('#format-filter').value = '';
+  setCollection('all');
+}));
+for (const id of ['area-filter', 'format-filter']) document.getElementById(id)?.addEventListener('change', resetView);
 document.getElementById('area-assign')?.addEventListener('click', async () => { try { await assignAreas(allItems().filter(a=>ui.selected.has(a.id)).map(areaKey).filter(Boolean), document.getElementById('area-entry')?.value || ''); } catch(e) { notice(e.message,true); } });
 document.getElementById('local-hide')?.addEventListener('click',hideSelectedLocal);
 document.getElementById('local-undo')?.addEventListener('click',undoHiddenLocal);
