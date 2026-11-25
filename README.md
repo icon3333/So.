@@ -38,6 +38,8 @@ python3 server.py
 
 Öffne [127.0.0.1:8769](http://127.0.0.1:8769/). Die Startseite und [`/reader`](http://127.0.0.1:8769/reader) zeigen dieselbe integrierte Liste. Die früheren Cockpit-Adressen `/cockpit` und `/cockpit.html` führen ebenfalls dorthin. Einstellungen bleiben unter [`/settings`](http://127.0.0.1:8769/settings). Ohne lokale Quellen oder importierte Daten kann die Liste leer sein.
 
+Über **Lesestoff**, **Aufgaben** und **Projekte** wechselst du den Typ direkt. **Filter** blendet Website, Bereich und Format ein; unter **Auswahl** findest du die Sammelaktionen. Bei Leseeinträgen stehen **Behalten** und **Details** direkt am Eintrag; **Weitere** enthält unter anderem Links und **Entfernen vormerken**. Das Vormerken allein ändert die Quelle nicht.
+
 ## Sources / settings setup
 
 The settings page has one **Set up** action for each source, including Karakeep. OAuth opens a popup synchronously from that click. The same-origin callback sends `{type:'so-setup-callback', provider:'x'|'inoreader', ok:true|false}` to the opener; the page checks origin and popup identity and resumes the already-started operation once on success. It does not store secrets or automatically trigger imports/writes. X's paid identity check and any subsequent import costs require explicit cost consent. The approved import limits (max pages, posts per page, USD budget), author lookup option, and restart choice are captured at the resume click and enforced by the importer. Invalid or missing limits are rejected before OAuth or import. Karakeep's destination test does not persist its API key.

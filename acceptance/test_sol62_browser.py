@@ -144,6 +144,27 @@ def main():
             desktop = js("({count:document.querySelectorAll('#article-list > .article-row').length, first:document.querySelector('#article-list > .article-row')?.innerText, bottom:document.querySelector('#article-list > .article-row')?.getBoundingClientRect().bottom})")
             require(desktop["count"] <= 10 and desktop["count"] > 0, f"first page should show a bounded round: {desktop}")
 
+            require(js("document.querySelector('[data-kind-view=task]')?.getClientRects().length > 0"), "task navigation should be directly visible")
+            for kind in ("task", "project", "reading"):
+                js(f"document.querySelector('[data-kind-view={kind}]').click()")
+                require(js(f"document.querySelector('[data-kind-view={kind}]').getAttribute('aria-pressed') === 'true'"), f"active {kind} navigation state")
+                titles = js("[...document.querySelectorAll('.article-title')].map(el => el.textContent.toLowerCase())")
+                require(titles and all(kind in title for title in titles), f"{kind} navigation should filter the existing worklist: {titles}")
+            js("document.querySelector('[data-kind-view=\"\"]').click()")
+            require(js("document.querySelector('#search').getClientRects().length > 0 && !document.querySelector('#source').getClientRects().length"), "show search, collapse advanced filters by default")
+            js("document.querySelector('#advanced-filters summary').click()")
+            require(js("document.querySelector('#source').getClientRects().length > 0 && document.querySelector('#format-filter').getClientRects().length > 0"), "advanced filters must remain accessible")
+            js("document.querySelector('#source').value='Synthetic X';document.querySelector('#source').dispatchEvent(new Event('change',{bubbles:true}))")
+            require(js("document.querySelector('#facet-count').textContent === ' (1)' && [...document.querySelectorAll('.article-title')].every(el => el.textContent.startsWith('Synthetic X post'))"), "source filter and its count should update")
+            js("document.querySelector('#source').value='';document.querySelector('#source').dispatchEvent(new Event('change',{bubbles:true}))")
+            js("document.querySelector('#advanced-filters summary').click()")
+            require(js("document.querySelector('[data-action=keep]').textContent.includes('Behalten')"), "primary row action needs a visible label")
+            js("document.querySelector('[data-action=details]').click()")
+            require(js("document.querySelector('#detail-dialog').open && document.querySelector('#detail-title').textContent.includes('Synthetic reading')"), "open real detail drawer")
+            js("document.querySelector('#close-detail').click()")
+            require(js("!document.querySelector('#select-filtered').getClientRects().length"), "batch controls collapsed by default")
+            js("document.querySelector('.selection-tools > summary').click()")
+
             # No action below is allowed to call a source mutation endpoint.
             source_mutations = []
             def inspect_network():
@@ -170,7 +191,8 @@ def main():
             js("document.querySelector('#page-size').value='500';document.querySelector('#page-size').dispatchEvent(new Event('change',{bubbles:true}))")
 
             # A source-neutral decision is local triage; it must not reach an origin write endpoint.
-            js("document.querySelector('[data-batch=keep]').click()")
+            js("document.querySelector('#select-all').click();document.querySelector('#batch-actions > summary').click();document.querySelector('[data-batch=keep]').click()")
+            until("document.querySelector('[data-action=keep][aria-pressed=true]') !== null", "batch keep saved")
             until("document.querySelectorAll('#article-list > .article-row').length > 0", "list after local triage")
             inspect_network()
             require(not source_mutations, f"source mutation request during local triage: {source_mutations}")
@@ -178,7 +200,6 @@ def main():
             # Load the all-items view before local triage; source rows do not have local-hide actions.
             js("document.querySelector('[data-status=all]').click()")
             js("document.querySelector('#search').value='';document.querySelector('#search').dispatchEvent(new Event('input',{bubbles:true}))")
-            js("document.querySelector('#kind-filter').selectedIndex=0;document.querySelector('#kind-filter').dispatchEvent(new Event('change',{bubbles:true}))")
             js("document.querySelector('#page-size').value='500';document.querySelector('#page-size').dispatchEvent(new Event('change',{bubbles:true}))")
             local_row = js("[...document.querySelectorAll('#article-list > .article-row')].find(r=>r.querySelector('[data-action=local-hide]'))?.dataset.id")
             require(local_row, "synthetic fixture must include a local cockpit row")
@@ -195,6 +216,7 @@ def main():
             require(not source_mutations, f"hide/undo made source mutation request: {source_mutations}")
 
             # Use control-driven local area assignment and local hide/undo.
+            js("document.querySelector('.local-actions > summary').click()")
             require(js("!!document.querySelector('#area-entry') && !!document.querySelector('#area-assign')"), "local area controls missing")
             area_entry = local_row
             require(area_entry, "expected a local cockpit area entry in the synthetic fixture")
@@ -207,6 +229,7 @@ def main():
             # Exercise handoff with selection and a note; clipboard/share action is UI-only here.
             js("document.querySelector('#article-list > .article-row input[type=checkbox]').click()")
             until("!document.querySelector('#hermes-note').disabled", "handoff note enabled")
+            js("if (!document.querySelector('#batch-actions').open) document.querySelector('#batch-actions > summary').click()")
             js("document.querySelector('#hermes-note').value='Synthetic handoff context';document.querySelector('#hermes-note').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#share-selected').click()")
             inspect_network()
             require(not source_mutations, f"local controls made a source mutation request: {source_mutations}")
@@ -214,12 +237,25 @@ def main():
             require(not unexpected, f"browser contacted non-local network: {unexpected}")
 
             # Desktop-to-mobile first-row user-visible geometry and no horizontal scroll.
+            js("document.querySelector('.selection-tools').open=false;document.querySelector('.local-actions').open=false;window.scrollTo(0,0)")
             cdp("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": True})
             mobile = js("({width:document.documentElement.scrollWidth,viewport:innerWidth,first:!!document.querySelector('#article-list > .article-row'),bottom:document.querySelector('#article-list > .article-row')?.getBoundingClientRect().bottom,focusable:[...document.querySelectorAll('#article-list button,#article-list a,#article-list input')].filter(e=>!e.disabled).length})")
             require(mobile["width"] <= 390 and mobile["viewport"] == 390, f"mobile horizontal overflow: {mobile}")
             require(mobile["first"] and mobile["bottom"] <= 844 and mobile["focusable"] > 0, f"first item/actions not usable on mobile: {mobile}")
+            js("document.querySelector('.settings-link').click()")
+            until("location.pathname === '/settings' && !!document.querySelector('.provider button')", "real settings provider list")
+            settings_widths = []
+            for width, height in ((390, 844), (1440, 900)):
+                cdp("Emulation.setDeviceMetricsOverride", {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": width == 390})
+                until(f"innerWidth === {width} && document.documentElement.scrollWidth === document.documentElement.clientWidth", f"settings fit at {width}px")
+                js("document.querySelector('.provider button').click()")
+                require(js("document.querySelector('#provider-dialog').open && document.querySelector('#dialog-title').textContent.length > 0"), "real provider dialog opens without submitting")
+                js("document.querySelector('#provider-form .close').click()")
+                settings_widths.append(width)
+            inspect_network()
+            require(not any(r['method'] == 'POST' and '/api/settings' in r['url'] for r in requests), "opening settings must not submit a provider action")
             require(not errors, f"page errors: {errors}")
-            print(json.dumps({"status":"PASS", "synthetic_rows":len(fixture_rows), "desktop":desktop, "mobile":mobile, "network_requests":len(requests), "source_mutations":source_mutations}, ensure_ascii=False))
+            print(json.dumps({"status":"PASS", "synthetic_rows":len(fixture_rows), "desktop":desktop, "mobile":mobile, "settings_widths":settings_widths, "network_requests":len(requests), "source_mutations":source_mutations}, ensure_ascii=False))
         except Exception:
             print(json.dumps({"status":"FAIL", "page_errors":errors, "requests":requests[-30:]}, ensure_ascii=False), file=sys.stderr)
             raise

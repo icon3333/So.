@@ -90,7 +90,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   assert.equal(cards.length, 7);
   assert.ok(descendants(cards[0]).some(item => item.textContent === 'Nicht eingerichtet'));
   assert.match(html, /<ul id="integrations"/);
-  assert.match(html, /<h1 id="page-title">Einrichtung<\/h1>/);
+  assert.match(html, /<h1 id="page-title">Einstellungen<\/h1>/);
   assert.ok(cards.every(row => row.tagName === 'li'));
   assert.ok(descendants(cards[0]).some(item => item.textContent === 'Einrichten'));
   assert.ok(descendants(cards[6]).some(item => item.textContent === 'Einrichten'));

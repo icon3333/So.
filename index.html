@@ -12,8 +12,14 @@
 <body>
   <a class="skip-link" href="#main">Zum Inhalt</a>
   <div class="app-shell">
-    <aside class="sidebar" aria-label="Themen und Verbindung">
+    <aside class="sidebar" aria-label="Arbeitsbereiche und Quellen">
       <a class="brand" href="/" aria-label="So. Startseite"><strong>So.</strong><span class="brand-sub" lang="en">Sorta organized.</span></a>
+      <nav class="kind-nav" aria-label="Einträge nach Typ">
+        <button type="button" data-kind-view="" aria-pressed="true">Alle</button>
+        <button type="button" data-kind-view="reading" aria-pressed="false">Lesestoff</button>
+        <button type="button" data-kind-view="task" aria-pressed="false">Aufgaben</button>
+        <button type="button" data-kind-view="project" aria-pressed="false">Projekte</button>
+      </nav>
       <details class="scope-panel"><summary>Quellen und Themen</summary>
       <div class="scope-label" id="scope-label">HERKUNFT · SPEICHERORT</div>
       <div class="collection-switch" role="group" aria-labelledby="scope-label">
@@ -58,7 +64,7 @@
       </details>
     </aside>
     <main id="main" tabindex="-1">
-      <header class="topbar"><h1>Arbeitsliste</h1><a class="eyebrow" href="/settings">Einstellungen</a></header>
+      <header class="topbar"><div><h1>Arbeitsliste</h1><p>Lesestoff, Aufgaben und Projekte an einem Ort.</p></div><a class="button secondary settings-link" href="/settings"><span aria-hidden="true">⚙</span> Einstellungen</a></header>
       <details class="inventory-panel"><summary>Quellenstand</summary><span id="saved-status" role="status"></span>
 <section class="source-inventory" aria-labelledby="source-inventory-heading">
         <div class="source-inventory-heading"><div><span class="eyebrow accent">DEINE ORIGINALQUELLEN</span><h2 id="source-inventory-heading">Gespeichert in</h2></div><span class="source-inventory-note">Unabhängig von Filtern und lokaler Triage</span></div>
@@ -71,15 +77,20 @@
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
       <section class="collection" aria-labelledby="collection-title">
         <div class="collection-heading"><div><h2 id="collection-title">Alle Themen</h2><p id="topic-progress">Die gespeicherte Sammlung</p></div><div class="heading-actions"><button id="undo" class="button secondary" disabled type="button"><span aria-hidden="true">↶</span> Rückgängig</button><button id="preview" class="button primary" disabled type="button">Entfernungen prüfen <span id="pending-count" class="button-count">0</span></button></div></div>
-        <div class="filters"><label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Artikel durchsuchen</span><input id="search" type="search" placeholder="Titel, Website oder Auszug suchen …" autocomplete="off"></label><label class="source-field"><span class="sr-only">Website oder Publikation filtern</span><select id="source"><option value="">Alle Websites</option></select></label></div>
-        <div class="list-navigation"><div class="status-tabs" role="group" aria-label="Nach Entscheidung filtern"><button class="status-tab active" data-status="saved" type="button">Arbeitsbestand</button><button class="status-tab" data-status="open" type="button">Offen <span id="open-count">–</span></button><button class="status-tab" data-status="keep" type="button">Behalten</button><button class="status-tab" data-status="remove" type="button">Vorgemerkt</button><button class="status-tab" data-status="skip" type="button">Übersprungen</button><button class="status-tab" data-status="all" type="button">Alle inkl. entfernter</button></div><label class="round-size">Pro Runde <select id="page-size"><option value="10">10</option><option value="20">20</option><option value="500">Alle</option></select></label></div>
-        <div class="batch-bar"><label class="select-all"><input id="select-all" type="checkbox"><span id="selection-label">Runde auswählen</span></label><button id="select-filtered" class="batch-scope-button" type="button" disabled>Alle gefilterten auswählen</button><details id="batch-actions" class="batch-actions" hidden><summary>Auswahl bearbeiten</summary><button id="open-selected" type="button">Ausgewählte Originale öffnen ↗</button><label class="hermes-note-label" for="hermes-note">Notiz für Hermes <input id="hermes-note" type="text" maxlength="500" placeholder="Optionaler Kontext" disabled></label><button id="share-selected" type="button">Für Hermes kopieren/teilen</button><button id="karakeep-selected" type="button" title="Speichert die ausgewählten Artikel und merkt nach bestätigtem Erfolg ihre Entfernung aus Inoreader vor">Ausgewählte in Karakeep speichern</button><button data-batch="keep" type="button">Behalten</button><button data-batch="remove" type="button">Entfernen vormerken</button><button data-batch="skip" type="button">Überspringen</button><button data-batch="clear" type="button">Zurücksetzen</button></details><span id="result-count" class="result-count"></span></div>
-        <div class="work-facets">
-          <label>Typ <select id="kind-filter"><option value="">Alle</option><option value="reading">Lesestoff</option><option value="task">Aufgaben</option><option value="project">Projekte</option></select></label>
-          <label>Bereich <select id="area-filter"><option value="">Alle</option></select></label>
-          <label>Format <select id="format-filter"><option value="">Alle</option></select></label>
-          <details><summary>Lokale Aktionen</summary><label>Lebensbereich <input id="area-entry" maxlength="80"></label><button type="button" id="area-assign">Auswahl zuordnen</button><button type="button" id="local-hide">Hier ausblenden</button><button type="button" id="local-undo">Ausblenden rückgängig</button></details>
+        <div class="list-tools">
+        <div class="filters"><label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Arbeitsliste durchsuchen</span><input id="search" type="search" placeholder="Arbeitsliste durchsuchen …" autocomplete="off"></label></div>
+        <details id="advanced-filters" class="advanced-filters">
+          <summary>Filter<span id="facet-count"></span></summary>
+          <div class="work-facets">
+            <label class="source-field">Website <select id="source"><option value="">Alle Websites</option></select></label>
+            <label>Bereich <select id="area-filter"><option value="">Alle</option></select></label>
+            <label>Format <select id="format-filter"><option value="">Alle</option></select></label>
+          </div>
+        </details>
         </div>
+        <div class="list-navigation"><div class="status-tabs" role="group" aria-label="Nach Entscheidung filtern"><button class="status-tab active" data-status="saved" type="button">Arbeitsbestand</button><button class="status-tab" data-status="open" type="button">Offen <span id="open-count">–</span></button><button class="status-tab" data-status="keep" type="button">Behalten</button><button class="status-tab" data-status="remove" type="button">Vorgemerkt</button><button class="status-tab" data-status="skip" type="button">Übersprungen</button><button class="status-tab" data-status="all" type="button">Alle inkl. entfernter</button></div><label class="round-size">Pro Runde <select id="page-size"><option value="10">10</option><option value="20">20</option><option value="500">Alle</option></select></label></div>
+        <div class="batch-bar"><details class="selection-tools"><summary>Auswahl<span id="selection-count"></span></summary><div class="selection-controls"><label class="select-all"><input id="select-all" type="checkbox"><span id="selection-label">Runde auswählen</span></label><button id="select-filtered" class="batch-scope-button" type="button" disabled>Alle gefilterten auswählen</button><details id="batch-actions" class="batch-actions" hidden><summary>Auswahl bearbeiten</summary><button id="open-selected" type="button">Ausgewählte Originale öffnen ↗</button><label class="hermes-note-label" for="hermes-note">Notiz für Hermes <input id="hermes-note" type="text" maxlength="500" placeholder="Optionaler Kontext" disabled></label><button id="share-selected" type="button">Für Hermes kopieren/teilen</button><button id="karakeep-selected" type="button" title="Speichert die ausgewählten Artikel und merkt nach bestätigtem Erfolg ihre Entfernung aus Inoreader vor">Ausgewählte in Karakeep speichern</button><button data-batch="keep" type="button">Behalten</button><button data-batch="remove" type="button">Entfernen vormerken</button><button data-batch="skip" type="button">Überspringen</button><button data-batch="clear" type="button">Zurücksetzen</button></details></div></details><span id="result-count" class="result-count"></span></div>
+        <details class="local-actions work-facets"><summary>Lokale Aktionen</summary><div><label>Lebensbereich <input id="area-entry" maxlength="80"></label><button type="button" id="area-assign">Auswahl zuordnen</button><button type="button" id="local-hide">Hier ausblenden</button><button type="button" id="local-undo">Ausblenden rückgängig</button></div></details>
         <div id="article-list" class="article-list" aria-label="Arbeitsliste"><div class="empty-state"><h3>Einträge werden geladen …</h3></div></div>
         <footer class="list-footer"><p id="snapshot-label">Gespeicherter Ausgangsstand</p><div class="pagination"><button id="previous-page" class="button secondary" type="button" disabled aria-label="Vorherige Runde">←</button><span id="page-label">–</span><button id="next-page" class="button secondary" type="button" disabled aria-label="Nächste Runde">→</button></div></footer>
       </section>
