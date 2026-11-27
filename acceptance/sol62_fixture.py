@@ -32,11 +32,12 @@ def make_fixture(root: Path) -> tuple[Path, Path]:
     native = {}
     for i in range(16):
         aid = _id("inoreader", i)
+        url = {1: "https://youtu.be/example", 2: "https://podcasts.apple.com/example"}.get(i, f"https://example.invalid/reading/{i:02d}")
         articles.append({
             "id": aid, "ref": f"synthetic-inoreader-{i:02d}",
             "title": f"Synthetic reading {i:02d}",
             "excerpt": f"Synthetic excerpt for shared-area fixture {i:02d}.",
-            "url": f"https://example.invalid/reading/{i:02d}",
+            "url": url,
             "source": "Synthetic Inoreader", "topic": "Shared synthetic area" if i < 5 else "Reading",
             "format": "Article", "origin": "inoreader", "originAccountId": None,
         })

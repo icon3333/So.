@@ -2,7 +2,13 @@
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const ui = { kind: '', collection: 'all', platform: '', topic: '', source: '', search: '', status: 'saved', page: 0, pageSize: 10, selected: new Set(), busy: false, detailId: null, preview: null };
+const facetLabels = {
+  collection: {inoreader:'Inoreader', x:'X'},
+  format: {article:'Artikel', video:'Video', podcast:'Podcast', post:'Post', other:'Sonstiges'},
+  platform: {youtube:'YouTube', substack:'Substack', podcast:'Podcast-Plattform', x:'X', web:'Andere Websites'},
+};
+const facetTitles = {collection:'Gespeichert in', format:'Format', platform:'Originalplattform'};
+const ui = { kind: '', facets: Object.fromEntries(Object.keys(facetLabels).map(key => [key, new Set()])), topic: '', source: '', search: '', status: 'saved', page: 0, pageSize: 10, selected: new Set(), busy: false, detailId: null, preview: null };
 let data = null;
 let remoteIds = null;
 let loginTimer = null;
@@ -130,17 +136,26 @@ function platform(article) {
   if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) return 'youtube';
   if (['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com'].includes(host)) return 'x';
   if (host === 'substack.com' || host.endsWith('.substack.com')) return 'substack';
+  if (['podcasts.apple.com', 'podcasts.google.com', 'pca.st', 'pocketcasts.com', 'overcast.fm', 'podcasts.spotify.com'].includes(host) || (host === 'open.spotify.com' && /^\/(?:intl-[a-z-]+\/)?(?:episode|show)\//i.test(new URL(article.url).pathname))) return 'podcast';
   return 'web';
 }
-function eligible(article) {
-  return (ui.collection === 'all' || origin(article) === ui.collection) && (!ui.platform || platform(article) === ui.platform);
+function readerFormat(article) {
+  const explicit = String(article.format || '').trim().toLowerCase();
+  if (explicit === 'podcast' || explicit === 'video') return explicit;
+  if (explicit === 'post' || explicit === 'x post') return 'post';
+  if (explicit && !['article','artikel','html'].includes(explicit)) return 'other';
+  return ({youtube:'video', podcast:'podcast', x:'post'})[platform(article)] || 'article';
+}
+const facetValue = {collection: origin, platform, format: readerFormat};
+function eligible(article, except) {
+  return Object.entries(ui.facets).every(([key, values]) => key === except || !values.size || values.has(facetValue[key](article)));
 }
 function enrichment(article) { return data.xContent?.entries?.[article.id] || (article.origin === 'x' && article.summary ? article : null); }
 function displayTitle(article) { return enrichment(article)?.title || article.title || 'Ohne Titel'; }
 function displayText(article) { const e = enrichment(article); return [e?.summary, e?.text, article.text, article.excerpt, article.author].filter(Boolean).join(' '); }
-function scopedArticles() {
+function scopedArticles(except) {
   const query = ui.search.toLocaleLowerCase('de');
-  return data.articles.filter((a) => eligible(a) && (!ui.topic || topic(a) === ui.topic) && (!ui.source || source(a) === ui.source) && (!query || [displayTitle(a), displayText(a), a.url, a.ref, source(a), topic(a)].join(' ').toLocaleLowerCase('de').includes(query)));
+  return data.articles.filter((a) => eligible(a, except) && (except === 'topic' || !ui.topic || topic(a) === ui.topic) && (!ui.source || source(a) === ui.source) && (!query || [displayTitle(a), displayText(a), a.url, a.ref, source(a), topic(a)].join(' ').toLocaleLowerCase('de').includes(query)));
 }
 
 
@@ -157,8 +172,7 @@ function localUrl(a) { try { const u = new URL(a.url); return ['http:', 'https:'
 function matchesCommonFilters(a) {
   const value = id => document.querySelector('#'+id)?.value || '';
   return (!ui.kind || (a.kind || 'reading') === ui.kind) &&
-    (!value('area-filter') || (cockpitAreas[areaKey(a)] || a.topic) === value('area-filter')) &&
-    (!value('format-filter') || (a.format || a.kind) === value('format-filter'));
+    (!value('area-filter') || (cockpitAreas[areaKey(a)] || a.topic) === value('area-filter'));
 }
 async function loadCockpit() {
   try {
@@ -186,9 +200,9 @@ function undoHiddenLocal() {
   localUndo.forEach(id => localHidden.delete(id)); localUndo.clear(); render();
 }
 
-function filteredArticles() {
-  return [...scopedArticles().filter(a=>!localHidden.has(a.id)&&matchesCommonFilters(a)), ...cockpitLocal.filter(a => !localHidden.has(a.id) && matchesCommonFilters(a) && (!ui.search || `${a.title} ${a.sourceLabel} ${a.excerpt}`.toLowerCase().includes(ui.search.toLowerCase())) && (!ui.source || a.sourceLabel === ui.source))].filter((a) => {
-    if (isLocalItem(a)) return ui.collection === 'all' && !ui.platform && !ui.topic && ['all','open','saved'].includes(ui.status);
+function filteredArticles(except) {
+  return [...scopedArticles(except).filter(a=>!localHidden.has(a.id)&&matchesCommonFilters(a)), ...cockpitLocal.filter(a => !localHidden.has(a.id) && matchesCommonFilters(a) && (!ui.search || `${a.title} ${a.sourceLabel} ${a.excerpt}`.toLowerCase().includes(ui.search.toLowerCase())) && (!ui.source || a.sourceLabel === ui.source))].filter((a) => {
+    if (isLocalItem(a)) return !Object.values(ui.facets).some(values => values.size) && !ui.topic && ['all','open','saved'].includes(ui.status);
     if (ui.status === 'all') return true;
     if (ui.status === 'saved') return !isRemoved(a);
     if (ui.status === 'open') return !isDecided(a);
@@ -204,17 +218,11 @@ function visibleArticles() {
 
 function resetView() { ui.page = 0; ui.selected.clear(); ui.selectionScope = 'round'; render(); }
 
-function setCollection(collection) {
-  ui.collection = collection;
-  ui.topic = ''; ui.source = ''; ui.search = ''; ui.status = 'saved';
-  $('#search').value = '';
-  resetView();
-}
-
-function setPlatform(value) {
-  ui.platform = value;
-  ui.source = '';
-  if (ui.topic && !data.articles.some(a => eligible(a) && topic(a) === ui.topic)) ui.topic = '';
+function setFacet(key, value) {
+  const values = ui.facets[key];
+  if (!value) values.clear();
+  else if (values.has(value)) values.delete(value);
+  else values.add(value);
   resetView();
 }
 
@@ -302,40 +310,78 @@ async function checkSourceInventory(source) {
 }
 
 function renderTopics() {
-  const groups = new Map();
-  for (const article of data.articles.filter(eligible)) {
-    if (!groups.has(topic(article))) groups.set(topic(article), []);
-    groups.get(topic(article)).push(article);
-  }
+  const names = [...new Set(data.articles.map(topic))].sort((a,b) => a.localeCompare(b, 'de'));
+  const counts = new Map();
+  for (const a of filteredArticles('topic')) if (!isLocalItem(a)) counts.set(topic(a), (counts.get(topic(a)) || 0) + 1);
+  const expanded = $('#topic-more').getAttribute('aria-expanded') === 'true';
+  const search = $('#topic-search').value.trim().toLocaleLowerCase('de');
+  const visible = expanded ? names.filter(name => name.toLocaleLowerCase('de').includes(search)) : names.filter((name,i) => i < 5 || name === ui.topic);
+  $('#topic-search').hidden = !expanded;
+  $('#topic-more').hidden = names.length <= 5 && !expanded;
+  $('#topic-more').textContent = expanded ? 'Weniger Themen' : `Alle ${names.length} Themen anzeigen`;
   $('#all-topics').classList.toggle('active', !ui.topic);
   $('#all-topics').setAttribute('aria-pressed', String(!ui.topic));
   $('#topics').replaceChildren();
-  for (const [name, articles] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
-    const progress = stats(articles);
+  for (const name of visible) {
+    const count = counts.get(name) || 0;
     const entry = node('div', 'topic-entry');
     const button = node('button', `topic-button${ui.topic === name ? ' active' : ''}`);
     button.type = 'button';
     button.dataset.topic = name;
     button.setAttribute('aria-pressed', String(ui.topic === name));
-    button.append(node('span', '', name), node('span', 'small-count', `${progress.decided}/${progress.total}`));
-    button.title = `${name}: ${progress.decided} von ${progress.total} entschieden`;
+    button.append(node('span', '', name), node('span', 'small-count', String(count)));
+    button.title = `${name}: ${count} Treffer mit den aktuellen Filtern`;
     button.addEventListener('click', () => { ui.topic = name; resetView(); restoreFocus({ topic: name }); });
-    const track = node('div', 'topic-mini-track');
-    track.setAttribute('aria-hidden', 'true');
-    const fill = node('div');
-    fill.style.width = `${progress.decided / progress.total * 100}%`;
-    track.append(fill);
-    entry.append(button, track);
+    entry.append(button);
     $('#topics').append(entry);
   }
 }
 
+function renderFacets() {
+  $('#reader-facets').hidden = Boolean(ui.kind && ui.kind !== 'reading');
+  const active = $('#active-facets');
+  active.replaceChildren();
+  for (const [key, labels] of Object.entries(facetLabels)) {
+    const values = ui.facets[key];
+    const counts = new Map();
+    const pool = filteredArticles(key).filter(a => !isLocalItem(a));
+    for (const article of pool) {
+      const value = facetValue[key](article);
+      counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    const selector = `[data-facet="${key}"]`;
+    for (const button of $$(selector)) {
+      const value = button.dataset.value;
+      button.setAttribute('aria-pressed', String(value ? values.has(value) : !values.size));
+      button.textContent = `${labels[value] || 'Alle'} · ${value ? counts.get(value) || 0 : pool.length}`;
+    }
+    for (const value of values) {
+      const button = node('button', 'facet-chip', `${facetTitles[key]}: ${labels[value]} ×`);
+      button.type = 'button';
+      button.setAttribute('aria-label', `${facetTitles[key]}: ${labels[value]} entfernen`);
+      button.addEventListener('click', () => {
+        setFacet(key, value);
+        (key === 'platform' && !$('#original-platform').open ? $('#original-platform summary') : $(`${selector}[data-value=""]`)).focus();
+      });
+      active.append(button);
+    }
+  }
+  $('#reader-facet-count').textContent = active.childElementCount ? `(${active.childElementCount} aktiv)` : '';
+  active.hidden = !active.childElementCount;
+  if (!active.hidden) {
+    const clear = node('button', 'text-button', 'Zusatzfilter zurücksetzen');
+    clear.type = 'button';
+    clear.addEventListener('click', () => { Object.values(ui.facets).forEach(values => values.clear()); resetView(); $('[data-facet="collection"][data-value=""]').focus(); });
+    active.append(clear);
+  }
+}
+
 function renderSourceOptions() {
-  const names = [...new Set([...data.articles.filter(eligible).map(source), ...cockpitLocal.map(a=>a.sourceLabel)])].sort((a, b) => a.localeCompare(b, 'de'));
+  const names = [...new Set([...data.articles.filter(eligible).map(source), ...cockpitLocal.map(a=>a.sourceLabel), ui.source].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'de'));
   const options = [new Option('Alle Quellen', ''), ...names.map((name) => new Option(name, name))];
   $('#source').replaceChildren(...options);
   $('#source').value = ui.source;
-  $('#source').closest('.source-field').hidden = names.length < 2;
+  $('#source').closest('.source-field').hidden = !ui.source && names.length < 2;
 }
 
 function decisionLabel(article) {
@@ -367,6 +413,7 @@ function renderArticle(article) {
   title.addEventListener('click', () => openDetails(article.id));
   const meta = node('div', 'article-meta');
   meta.append(node('span', 'source-name', source(article)), node('span', 'meta-separator', '·'), node('span', '', formatDate(article.published)), node('span', 'topic-tag', topic(article)));
+  if (!isLocalItem(article)) meta.append(node('span', '', `${facetLabels.format[readerFormat(article)]} · ${facetLabels.platform[platform(article)]} · gespeichert in ${destinationLabel(article)}`));
   if (isLocalItem(article)) meta.append(node('span', 'decision-tag', cockpitAreas[article.originalId] || 'Lokal'));
   if (isLocalItem(article)) meta.append(node('span','decision-tag',article.sourceLabel));
   if (!isLocalItem(article) && (choice(article) || isRemoved(article))) meta.append(node('span', `decision-tag ${isRemoved(article) ? 'removed' : choice(article)}`, decisionLabel(article)));
@@ -451,14 +498,16 @@ function renderSelection() {
 
 function render() {
   if (!data) return;
-  const overall = stats(data.articles.filter(eligible));
+  const overall = stats(data.articles);
 
   $('#pending-count').textContent = overall.remove;
   $('#saved-status').textContent = ui.busy ? 'Wird verarbeitet …' : '✓ Fortschritt lokal gespeichert';
+  $('#topic-panel').hidden = Boolean(ui.kind && ui.kind !== 'reading');
   renderTopics();
+  renderFacets();
   renderSourceOptions();
   const kindLabels = { reading: 'Lesestoff', task: 'Aufgaben', project: 'Projekte' };
-  $('#collection-title').textContent = ui.topic || (ui.collection === 'x' ? 'X-Lesezeichen' : ui.collection === 'inoreader' ? 'Inoreader-Leseliste' : kindLabels[ui.kind] || 'Alle Einträge');
+  $('#collection-title').textContent = ui.topic || kindLabels[ui.kind] || 'Alle Einträge';
   $$('[data-kind-view]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.kindView === ui.kind)));
   const group = stats(data.articles.filter((a) => eligible(a) && (!ui.topic || topic(a) === ui.topic)));
   $('#topic-progress').textContent = `${group.decided} von ${group.total} entschieden · ${group.open} offen${ui.topic ? ' in diesem Thema' : ' in deiner Sammlung'}`;
@@ -470,17 +519,16 @@ function render() {
   const filtered = filteredArticles();
   const visible = visibleArticles();
   $('#article-list').replaceChildren(...visible.map(renderArticle));
-  for (const [id,values] of [['area-filter', allItems().map(a=>cockpitAreas[areaKey(a)] || a.topic)], ['format-filter',allItems().map(a=>a.format || a.kind)]]) {
-    const select = document.getElementById(id), current = select.value;
-    select.replaceChildren(new Option('Alle',''), ...[...new Set(values.filter(Boolean))].sort().map(v=>new Option(v,v))); select.value=current;
-  }
+  const area = $('#area-filter'), currentArea = area.value;
+  const areas = [...new Set(allItems().map(a=>cockpitAreas[areaKey(a)] || a.topic).filter(Boolean))].sort();
+  area.replaceChildren(new Option('Alle',''), ...areas.map(v=>new Option(v,v))); area.value = currentArea;
   if (!visible.length) {
     const empty = node('div', 'empty-state');
     const isAllDone = !ui.search && !ui.source && ui.status === 'open' && group.open === 0;
     empty.append(node('span', 'empty-icon', isAllDone ? '✓' : '⌕'), node('h3', '', isAllDone ? 'Ein Stück leichter.' : 'Hier gibt es gerade keine Artikel.'), node('p', '', isAllDone ? 'Alles in dieser Ansicht ist entschieden. Vorgemerkte Entfernungen kannst du oben prüfen und anschließend in Inoreader bestätigen.' : 'Wähle ein anderes Thema, ändere den Filter oder verkürze deine Suche.'));
     $('#article-list').append(empty);
   }
-  const filterCount = [ui.source, $('#area-filter').value, $('#format-filter').value].filter(Boolean).length;
+  const filterCount = [ui.source, $('#area-filter').value].filter(Boolean).length;
   $('#facet-count').textContent = filterCount ? ` (${filterCount})` : '';
   $('#result-count').textContent = `${filtered.length} ${filtered.length === 1 ? 'Eintrag' : 'Einträge'}`;
   const pages = Math.max(1, Math.ceil(filtered.length / ui.pageSize));
@@ -490,14 +538,7 @@ function render() {
   $('#undo').disabled = ui.busy || !data.state.history?.length;
   $('#preview').disabled = ui.busy || !overall.remove;
   $('#snapshot-label').textContent = `${data.articles.filter(eligible).length} Einträge in dieser Herkunftsansicht · Inoreader-Ausgangsstand: ${formatDate(data.fetchedAt)}${data.state.xRemote?.checkedAt ? ` · X-Inventur: ${formatDate(data.state.xRemote.checkedAt, true)}` : ' · X-Live-Stand ungeprüft'}`;
-  $$('[data-collection]').forEach(button => {
-    button.classList.toggle('active', button.dataset.collection === ui.collection);
-    button.setAttribute('aria-pressed', String(button.dataset.collection === ui.collection));
-  });
-  $$('[data-platform]').forEach(button => {
-    button.classList.toggle('active', button.dataset.platform === ui.platform);
-    button.setAttribute('aria-pressed', String(button.dataset.platform === ui.platform));
-  });
+
   const collectionCount = $('#collection-all-count');
   if (collectionCount) collectionCount.textContent = data.articles.length;
   const xCount = $('#collection-x-count');
@@ -691,7 +732,7 @@ function renderDetails() {
   if (!article) { $('#detail-dialog').close(); return; }
   $('#detail-ref').textContent = `ARTIKEL ${article.ref || ''}`;
   $('#detail-title').textContent = displayTitle(article);
-  $('#detail-meta').textContent = `Herkunft: ${origin(article) === 'x' ? 'X-Lesezeichen' : 'Inoreader'} · Plattform: ${{youtube:'YouTube',x:'X',substack:'Substack',web:'Webseite / Sonstiges'}[platform(article)]} · ${source(article)} · ${article.author || 'Autor nicht mitgeliefert'} · ${formatDate(article.published || article.createdAt)} · ${topic(article)}`;
+  $('#detail-meta').textContent = `Gespeichert in: ${destinationLabel(article)} · ${facetLabels.format[readerFormat(article)]} · ${facetLabels.platform[platform(article)]} · ${source(article)} · ${article.author || 'Autor nicht mitgeliefert'} · ${formatDate(article.published || article.createdAt)} · ${topic(article)}`;
   $('#detail-status').textContent = decisionLabel(article);
   $('#detail-karakeep').textContent = karakeepLabel(article);
   $('#detail-karakeep').disabled = karakeepDisabled(article);
@@ -866,22 +907,35 @@ async function connect() {
 }
 
 $('#all-topics').addEventListener('click', () => { ui.topic = ''; resetView(); });
-$$('[data-collection]').forEach(button => button.addEventListener('click', () => setCollection(button.dataset.collection)));
+const compactReader = window.matchMedia('(max-width: 760px)');
+const updateReaderPanels = () => { $('#topic-panel').open = $('#reader-facets').open = !compactReader.matches; };
+updateReaderPanels();
+compactReader.addEventListener('change', updateReaderPanels);
+$('#topic-more').addEventListener('click', () => {
+  const expanded = $('#topic-more').getAttribute('aria-expanded') !== 'true';
+  $('#topic-more').setAttribute('aria-expanded', String(expanded));
+  $('#topic-search').value = '';
+  if (data) renderTopics();
+  if (expanded) $('#topic-search').focus();
+});
+$('#topic-search').addEventListener('input', () => { if (data) renderTopics(); });
+$$('[data-facet]').forEach(button => button.addEventListener('click', () => setFacet(button.dataset.facet, button.dataset.value)));
 $('#search').addEventListener('input', (event) => { ui.search = event.target.value.trim(); if (data) resetView(); });
 $('#source').addEventListener('change', (event) => { ui.source = event.target.value; resetView(); });
 $$('[data-kind-view]').forEach((button) => button.addEventListener('click', () => {
   ui.kind = button.dataset.kindView;
-  ui.platform = '';
+  Object.values(ui.facets).forEach(values => values.clear());
+  ui.topic = ''; ui.source = ''; ui.search = ''; ui.status = 'saved';
+  $('#search').value = '';
   $('#area-filter').value = '';
-  $('#format-filter').value = '';
-  setCollection('all');
+  resetView();
 }));
-for (const id of ['area-filter', 'format-filter']) document.getElementById(id)?.addEventListener('change', resetView);
+$('#area-filter').addEventListener('change', resetView);
 document.getElementById('area-assign')?.addEventListener('click', async () => { try { await assignAreas(allItems().filter(a=>ui.selected.has(a.id)).map(areaKey).filter(Boolean), document.getElementById('area-entry')?.value || ''); } catch(e) { notice(e.message,true); } });
 document.getElementById('local-hide')?.addEventListener('click',hideSelectedLocal);
 document.getElementById('local-undo')?.addEventListener('click',undoHiddenLocal);
 document.getElementById('posteo-load')?.addEventListener('click',async()=>{ try { const r=await fetch('/api/cockpit/posteo',{headers:{'X-Triage-Request':'1'}}); const payload=await r.json(); if(!r.ok) throw new Error(payload.error||'Posteo-Abruf fehlgeschlagen.'); const items=payload.items||[]; cockpitLocal=[...cockpitLocal.filter(a=>a.source!=='posteo'),...items.map(i=>({...i,id:`local:${i.id}`,originalId:i.id,localItem:true,url:i.url||'',title:i.title||'(ohne Titel)',sourceLabel:'Posteo',excerpt:i.detail||''}))]; items.forEach(i=>{if(i.lifeArea)cockpitAreas[i.id]=i.lifeArea;}); render(); } catch(e){notice(e.message,true);} });
-$$('[data-platform]').forEach(button => button.addEventListener('click', () => setPlatform(button.dataset.platform)));
+
 $('#page-size').addEventListener('change', (event) => { ui.pageSize = Number(event.target.value); resetView(); });
 $$('.status-tab').forEach((button) => button.addEventListener('click', () => { ui.status = button.dataset.status; resetView(); }));
 $('#select-all').addEventListener('change', (event) => {

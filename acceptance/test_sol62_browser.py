@@ -151,9 +151,19 @@ def main():
                 titles = js("[...document.querySelectorAll('.article-title')].map(el => el.textContent.toLowerCase())")
                 require(titles and all(kind in title for title in titles), f"{kind} navigation should filter the existing worklist: {titles}")
             js("document.querySelector('[data-kind-view=\"\"]').click()")
+            js("""document.querySelector('[data-topic="Shared synthetic area"]').click();
+                document.querySelector('[data-facet=collection][data-value=inoreader]').click();
+                document.querySelector('[data-facet=format][data-value=video]').click();
+                document.querySelector('[data-facet=format][data-value=podcast]').click();""")
+            require(js("document.querySelector('#collection-title').textContent === 'Shared synthetic area' && document.querySelector('#result-count').textContent === '2 Einträge'"), "topic and origin combine with video OR podcast")
+            js("document.querySelector('#original-platform summary').click(); document.querySelector('[data-facet=platform][data-value=youtube]').click()")
+            require(js("document.querySelector('#result-count').textContent === '1 Eintrag' && document.querySelector('.article-meta').textContent.includes('YouTube · gespeichert in Inoreader')"), "platform narrows result without changing bookmark origin")
+            js("document.querySelector('#original-platform summary').click(); document.querySelector('[aria-label=\"Originalplattform: YouTube entfernen\"]').click()")
+            require(js("document.querySelector('#result-count').textContent === '2 Einträge'"), "collapsed platform facet can be removed above results")
+            js("document.querySelector('#active-facets .text-button').click(); document.querySelector('#all-topics').click()")
             require(js("document.querySelector('#search').getClientRects().length > 0 && !document.querySelector('#source').getClientRects().length"), "show search, collapse advanced filters by default")
             js("document.querySelector('#advanced-filters summary').click()")
-            require(js("document.querySelector('#source').getClientRects().length > 0 && document.querySelector('#format-filter').getClientRects().length > 0"), "advanced filters must remain accessible")
+            require(js("document.querySelector('#source').getClientRects().length > 0 && document.querySelector('#area-filter').getClientRects().length > 0"), "advanced filters must remain accessible")
             js("document.querySelector('#source').value='Synthetic X';document.querySelector('#source').dispatchEvent(new Event('change',{bubbles:true}))")
             require(js("document.querySelector('#facet-count').textContent === ' (1)' && [...document.querySelectorAll('.article-title')].every(el => el.textContent.startsWith('Synthetic X post'))"), "source filter and its count should update")
             js("document.querySelector('#source').value='';document.querySelector('#source').dispatchEvent(new Event('change',{bubbles:true}))")
@@ -237,7 +247,7 @@ def main():
             require(not unexpected, f"browser contacted non-local network: {unexpected}")
 
             # Desktop-to-mobile first-row user-visible geometry and no horizontal scroll.
-            js("document.querySelector('.selection-tools').open=false;document.querySelector('.local-actions').open=false;window.scrollTo(0,0)")
+            js("document.querySelector('.selection-tools').open=false;document.querySelector('.local-actions').open=false;document.querySelector('#topic-panel').open=false;window.scrollTo(0,0)")
             cdp("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": True})
             mobile = js("({width:document.documentElement.scrollWidth,viewport:innerWidth,first:!!document.querySelector('#article-list > .article-row'),bottom:document.querySelector('#article-list > .article-row')?.getBoundingClientRect().bottom,focusable:[...document.querySelectorAll('#article-list button,#article-list a,#article-list input')].filter(e=>!e.disabled).length})")
             require(mobile["width"] <= 390 and mobile["viewport"] == 390, f"mobile horizontal overflow: {mobile}")
