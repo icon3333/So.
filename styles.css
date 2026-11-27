@@ -59,6 +59,27 @@ main { margin: 0 auto; max-width: 1240px; padding: 30px clamp(24px, 5vw, 74px) 3
 .collection-heading h2 { font-family: Georgia, serif; font-weight: 400; }
 .list-tools { display: flex; flex-wrap: wrap; align-items: start; gap: 8px; padding: 0 20px; }
 .list-tools .filters { flex: 1 1 240px; min-width: 0; padding: 0; }
+#topic-panel > summary { margin-bottom: 8px; }
+#topic-search { width: 100%; margin-top: 4px; padding: 7px; border: 1px solid var(--line); border-radius: 6px; }
+.source-management { margin-top: 12px; }
+.reading-facets { margin: 10px 20px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.reading-facets[hidden], .active-facets[hidden] { display: none; }
+.reading-facets > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--teal); }
+.facet-row { display: grid; grid-template-columns: 112px minmax(0,1fr); align-items: baseline; gap: 7px; margin-block: 4px; }
+.facet-row > strong, #original-platform > summary { font-size: 12px; }
+.facet-options { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.facet-chip { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: transparent; color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+.facet-chip:hover { border-color: var(--teal); }
+.facet-chip[aria-pressed="true"] { background: var(--teal-light); border-color: var(--teal); color: var(--teal); font-weight: 700; }
+#original-platform > summary { cursor: pointer; color: var(--teal); padding-block: 5px; }
+.active-facets { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--line); }
+@media (max-width: 640px) {
+  .app-shell .sidebar { padding-block: 6px; gap: 4px; }
+  .source-management { margin-top: 0; }
+  #topic-panel:not([open]) > summary { margin-bottom: 0; }
+  .reading-facets { margin: 7px 10px; }
+  .facet-row { grid-template-columns: 1fr; gap: 4px; }
+}
 .search-field { min-height: 44px; background: #fafbf6; }
 .search-field input { font-size: 14px; min-width: 0; }
 .search-field input::placeholder, .article-excerpt { color: var(--muted); }

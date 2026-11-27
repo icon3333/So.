@@ -120,17 +120,17 @@ test('legacy payload keeps all entries and source provenance is not URL domain',
   vm.runInContext(`
     initial.articles[0].url = 'https://x.com/author/status/123';
     applyState(initial);
-    ui.collection = 'all';
+    ui.facets.collection.clear();
     ui.status = 'all';
   `, h.context);
   assert.deepEqual(h.value('scopedArticles().map(a => a.id)'), ['a', 'b', 'c']);
-  vm.runInContext("ui.collection = 'x'", h.context);
+  vm.runInContext("setFacet('collection','x')", h.context);
   assert.deepEqual(h.value('scopedArticles().map(a => a.id)'), []);
-  vm.runInContext("ui.collection = 'all'; ui.status = 'saved'; remoteIds = new Set(['b', 'c'])", h.context);
+  vm.runInContext("setFacet('collection',''); ui.status = 'saved'; remoteIds = new Set(['b', 'c'])", h.context);
   assert.deepEqual(h.value('filteredArticles().map(a => a.id)'), ['b', 'c']);
-  vm.runInContext("initial.articles[1].origin='x'; initial.articles[1].url='https://example.org/non-x'; applyState(initial); ui.collection='x'; ui.status='all'", h.context);
+  vm.runInContext("initial.articles[1].origin='x'; initial.articles[1].url='https://example.org/non-x'; applyState(initial); setFacet('collection','x'); ui.status='all'", h.context);
   assert.deepEqual(h.value('scopedArticles().map(a => a.id)'), ['b']);
-  vm.runInContext("ui.collection='inoreader'", h.context);
+  vm.runInContext("setFacet('collection',''); setFacet('collection','inoreader')", h.context);
   assert.deepEqual(h.value('scopedArticles().map(a => a.id)'), ['a','c']);
 });
 
@@ -161,36 +161,33 @@ test('platform classification is independent of bookmark origin and rejects look
     {id:'newsletter',origin:'inoreader',url:'https://writer.substack.com/p/story'},
     {id:'html',origin:'inoreader',url:'https://example.org/article'},
     {id:'spoof',origin:'inoreader',url:'https://youtube.com.evil.example/video'}];
-    ui.collection='all'; ui.platform=''; ui.topic=''; ui.source=''; ui.search=''; ui.status='all'`, h.context);
+    ui.topic=''; ui.source=''; ui.search=''; ui.status='all'`, h.context);
   assert.deepEqual(h.value('data.articles.map(platform)'), ['x','x','youtube','substack','web','web']);
-  vm.runInContext("ui.platform='x'", h.context);
+  vm.runInContext("setFacet('platform','x')", h.context);
   assert.deepEqual(h.value('scopedArticles().map(a=>a.id)'), ['ir-x','native-x']);
-  vm.runInContext("ui.collection='inoreader'", h.context);
+  vm.runInContext("setFacet('collection','inoreader')", h.context);
   assert.deepEqual(h.value('scopedArticles().map(a=>a.id)'), ['ir-x']);
-  vm.runInContext("ui.platform='youtube'", h.context);
+  vm.runInContext("setFacet('platform',''); setFacet('platform','youtube')", h.context);
   assert.deepEqual(h.value('scopedArticles().map(a=>a.id)'), ['video']);
 });
 
-test('platform buttons sit in the sidebar between origin and themes without a dropdown', () => {
+test('reading facets sit above the worklist, not in the topic sidebar', () => {
   const html = fs.readFileSync(`${__dirname}/index.html`, 'utf8');
   const sidebar = html.slice(html.indexOf('<aside'), html.indexOf('</aside>'));
-  assert.deepEqual([...sidebar.matchAll(/data-platform="([^"]*)"/g)].map(match => match[1]), ['', 'youtube', 'x', 'substack', 'web']);
-  assert.ok(sidebar.indexOf('collection-switch') < sidebar.indexOf('platform-switch'));
-  assert.ok(sidebar.indexOf('platform-switch') < sidebar.indexOf('THEMENFILTER') || !sidebar.includes('THEMENFILTER'));
-  assert.match(sidebar, /role="group" aria-labelledby="platform-label"/);
-  assert.doesNotMatch(html, /<select[^>]*id="platform"/);
+  assert.match(sidebar, /id="topics"/);
+  assert.doesNotMatch(sidebar, /data-facet/);
+  assert.match(html, /id="reader-facets"[\s\S]+id="original-platform"[\s\S]+id="article-list"/);
 });
 
 test('platform changes clear stale selection without changing removal origin', () => {
   const h = harness();
   fakeDom(h);
-  vm.runInContext("initial.articles[0].url='https://x.com/u/status/101'; applyState(initial); ui.source='old'; setPlatform('x')", h.context);
-  assert.equal(h.value('ui.collection'), 'all');
-  assert.equal(h.value('ui.source'), '');
+  vm.runInContext("initial.articles[0].url='https://x.com/u/status/101'; applyState(initial); setFacet('platform','x')", h.context);
+  assert.equal(h.value('ui.facets.collection.size'), 0);
   assert.deepEqual(h.value('[...ui.selected]'), []);
   assert.deepEqual(h.value('scopedArticles().map(a=>origin(a))'), ['inoreader']);
-  vm.runInContext("setCollection('inoreader')", h.context);
-  assert.equal(h.value('ui.platform'), 'x');
+  vm.runInContext("setFacet('collection','inoreader')", h.context);
+  assert.deepEqual(h.value('[...ui.facets.platform]'), ['x']);
 });
 
 test('native records remain visible with Inoreader membership and combined savedIds', () => {
@@ -201,12 +198,12 @@ test('native records remain visible with Inoreader membership and combined saved
   assert.deepEqual(h.value('filteredArticles().map(a=>a.id)'), ['a','b']);
 });
 
-test('changing provenance resets hidden selection and stale publisher search', () => {
+test('changing provenance clears hidden selection but preserves topic and search', () => {
   const h = harness();
   const get = fakeDom(h);
-  vm.runInContext("ui.source='old'; ui.search='old'; ui.page=2; setCollection('inoreader')", h.context);
+  vm.runInContext("ui.source='old'; ui.search='old'; ui.topic='Finanzen'; ui.page=2; setFacet('collection','inoreader')", h.context);
   assert.deepEqual(h.value('[...ui.selected]'), []);
-  assert.deepEqual(h.value('[ui.page,ui.source,ui.search,ui.collection]'), [0,'','','inoreader']);
+  assert.deepEqual(h.value('[ui.page,ui.source,ui.search,ui.topic,...ui.facets.collection]'), [0,'old','old','Finanzen','inoreader']);
   assert.equal(get('#search').value, '');
 });
 
@@ -274,4 +271,21 @@ test('read-only X check requires approval and sends zero mutations', async()=>{
   get('#x-check-approval').checked=true;await vm.runInContext('runXCheck()',h.context);
   assert.equal(sent[0].path,'/api/x/check');assert.deepEqual(JSON.parse(JSON.stringify(sent[0].body)),{posts:0,users:0,mutations:0,verification_posts:4,pages:2,usd:.02});
   assert.match(h.messages.at(-1),/unbekannt/);
+});
+test('reading facets compose without changing the bookmark origin or active topic', () => {
+  const h = harness();
+  fakeDom(h);
+  vm.runInContext(`data.articles = [
+    {id:'a', topic:'Finanzen', origin:'inoreader', url:'https://youtu.be/vid'},
+    {id:'b', topic:'Finanzen', origin:'inoreader', url:'https://news.substack.com/p/ep', format:'Podcast'},
+    {id:'c', topic:'Tech', origin:'inoreader', url:'https://youtu.be/vid'},
+    {id:'d', topic:'Finanzen', origin:'x', url:'https://x.com/u/status/12'}];
+    ui.topic='Finanzen'; setFacet('collection','inoreader'); setFacet('format','video'); setFacet('format','podcast');`, h.context);
+  assert.deepEqual(h.value('scopedArticles().map(a=>a.id)'), ['a','b']);
+  vm.runInContext("setFacet('platform','substack')", h.context);
+  assert.deepEqual(h.value('scopedArticles().map(a=>a.id)'), ['b']);
+  assert.deepEqual(h.value("scopedArticles('platform').map(a=>a.id)"), ['a','b']);
+  assert.equal(h.value('destinationLabel(data.articles[1])'), 'Inoreader');
+  assert.equal(h.value("readerFormat({url:'https://example.org/issue',format:'Newsletter'})"), 'other');
+  assert.equal(h.value("readerFormat({url:'https://youtu.be/vid',format:'Article'})"), 'video');
 });

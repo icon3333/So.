@@ -20,25 +20,13 @@
         <button type="button" data-kind-view="task" aria-pressed="false">Aufgaben</button>
         <button type="button" data-kind-view="project" aria-pressed="false">Projekte</button>
       </nav>
-      <details class="scope-panel"><summary>Quellen und Themen</summary>
-      <div class="scope-label" id="scope-label">HERKUNFT · SPEICHERORT</div>
-      <div class="collection-switch" role="group" aria-labelledby="scope-label">
-        <button class="active" type="button" data-collection="all" aria-pressed="true"><span class="origin-mark" aria-hidden="true">◎</span> Alle</button>
-        <button type="button" data-collection="inoreader" aria-pressed="false"><span class="origin-mark" aria-hidden="true">IR</span> Inoreader</button>
-        <button type="button" data-collection="x" aria-pressed="false"><span class="origin-mark" aria-hidden="true">𝕏</span> X</button>
-      </div>
-      <div class="scope-label" id="platform-label">PLATTFORM</div>
-      <div class="platform-switch" role="group" aria-labelledby="platform-label" title="Erkennung anhand der Linkadresse; eigene Substack-Domains können unter anderen Webseiten erscheinen.">
-        <button class="active" type="button" data-platform="" aria-pressed="true"><span aria-hidden="true">◎</span> Alle</button>
-        <button type="button" data-platform="youtube" aria-pressed="false"><span aria-hidden="true">▶</span> YouTube</button>
-        <button type="button" data-platform="x" aria-pressed="false"><span aria-hidden="true">𝕏</span> X</button>
-        <button type="button" data-platform="substack" aria-pressed="false"><span aria-hidden="true">≡</span> Substack</button>
-        <button type="button" data-platform="web" aria-pressed="false"><span aria-hidden="true">↗</span> Andere Webseiten</button>
-      </div>
-      <div class="topic-heading"><span>THEMENFILTER</span><span>Entschieden</span></div>
+      <details class="scope-panel" id="topic-panel" open><summary>Themen</summary>
       <button class="all-topics topic-button active" id="all-topics" type="button"><span>Alle Themen</span></button>
       <nav id="topics" aria-label="Nach Thema filtern"></nav>
-      <p class="topic-note">Quellenauswahl und Themenfilter lassen sich kombinieren. „Alle Themen“ hebt nur den Themenfilter auf. Themen ohne Inhaltsabruf bleiben vorläufig.</p>
+      <button class="text-button" id="topic-more" type="button" aria-expanded="false" aria-controls="topic-search topics" hidden>Alle Themen anzeigen</button>
+      <input id="topic-search" type="search" aria-label="Thema suchen" placeholder="Thema suchen …" hidden>
+      </details>
+      <details class="scope-panel source-management"><summary>Quellen verwalten</summary>
       <button id="x-import" class="button primary full-width" type="button" disabled>X-Lesezeichen importieren</button>
       <button id="x-check" class="text-button full-width" type="button" disabled>Nur lesend: X-Stand prüfen</button>
       <p id="x-import-status" class="import-status" aria-live="polite"></p>
@@ -84,10 +72,33 @@
           <div class="work-facets">
             <label class="source-field">Website <select id="source"><option value="">Alle Websites</option></select></label>
             <label>Bereich <select id="area-filter"><option value="">Alle</option></select></label>
-            <label>Format <select id="format-filter"><option value="">Alle</option></select></label>
           </div>
         </details>
         </div>
+        <details id="reader-facets" class="reading-facets" open><summary>Lesestoff filtern <span id="reader-facet-count"></span></summary>
+          <div class="facet-row" role="group" aria-labelledby="saved-facet-label"><strong id="saved-facet-label">Gespeichert in</strong><div class="facet-options">
+            <button class="facet-chip" type="button" data-facet="collection" data-value="" aria-pressed="true">Alle</button>
+            <button class="facet-chip" type="button" data-facet="collection" data-value="inoreader" aria-pressed="false">Inoreader</button>
+            <button class="facet-chip" type="button" data-facet="collection" data-value="x" aria-pressed="false">X</button>
+          </div></div>
+          <div class="facet-row" role="group" aria-labelledby="format-facet-label"><strong id="format-facet-label">Format</strong><div class="facet-options">
+            <button class="facet-chip" type="button" data-facet="format" data-value="" aria-pressed="true">Alle</button>
+            <button class="facet-chip" type="button" data-facet="format" data-value="article" aria-pressed="false">Artikel</button>
+            <button class="facet-chip" type="button" data-facet="format" data-value="video" aria-pressed="false">Video</button>
+            <button class="facet-chip" type="button" data-facet="format" data-value="podcast" aria-pressed="false">Podcast</button>
+            <button class="facet-chip" type="button" data-facet="format" data-value="post" aria-pressed="false">Post</button>
+            <button class="facet-chip" type="button" data-facet="format" data-value="other" aria-pressed="false">Sonstiges</button>
+          </div></div>
+          <details id="original-platform"><summary>Originalplattform</summary><div class="facet-options" role="group" aria-label="Originalplattform" title="Erkennung anhand der Linkadresse; eigene Substack-Domains können unter anderen Websites erscheinen.">
+            <button class="facet-chip" type="button" data-facet="platform" data-value="" aria-pressed="true">Alle</button>
+            <button class="facet-chip" type="button" data-facet="platform" data-value="youtube" aria-pressed="false">YouTube</button>
+            <button class="facet-chip" type="button" data-facet="platform" data-value="substack" aria-pressed="false">Substack</button>
+            <button class="facet-chip" type="button" data-facet="platform" data-value="podcast" aria-pressed="false">Podcast-Plattform</button>
+            <button class="facet-chip" type="button" data-facet="platform" data-value="x" aria-pressed="false">X</button>
+            <button class="facet-chip" type="button" data-facet="platform" data-value="web" aria-pressed="false">Andere Websites</button>
+          </div></details>
+          <div class="facet-options active-facets" id="active-facets" role="group" aria-label="Aktive Zusatzfilter" hidden></div>
+        </details>
         <div class="list-navigation"><div class="status-tabs" role="group" aria-label="Nach Entscheidung filtern"><button class="status-tab active" data-status="saved" type="button">Arbeitsbestand</button><button class="status-tab" data-status="open" type="button">Offen <span id="open-count">–</span></button><button class="status-tab" data-status="keep" type="button">Behalten</button><button class="status-tab" data-status="remove" type="button">Vorgemerkt</button><button class="status-tab" data-status="skip" type="button">Übersprungen</button><button class="status-tab" data-status="all" type="button">Alle inkl. entfernter</button></div><label class="round-size">Pro Runde <select id="page-size"><option value="10">10</option><option value="20">20</option><option value="500">Alle</option></select></label></div>
         <div class="batch-bar"><details class="selection-tools"><summary>Auswahl<span id="selection-count"></span></summary><div class="selection-controls"><label class="select-all"><input id="select-all" type="checkbox"><span id="selection-label">Runde auswählen</span></label><button id="select-filtered" class="batch-scope-button" type="button" disabled>Alle gefilterten auswählen</button><details id="batch-actions" class="batch-actions" hidden><summary>Auswahl bearbeiten</summary><button id="open-selected" type="button">Ausgewählte Originale öffnen ↗</button><label class="hermes-note-label" for="hermes-note">Notiz für Hermes <input id="hermes-note" type="text" maxlength="500" placeholder="Optionaler Kontext" disabled></label><button id="share-selected" type="button">Für Hermes kopieren/teilen</button><button id="karakeep-selected" type="button" title="Speichert die ausgewählten Artikel und merkt nach bestätigtem Erfolg ihre Entfernung aus Inoreader vor">Ausgewählte in Karakeep speichern</button><button data-batch="keep" type="button">Behalten</button><button data-batch="remove" type="button">Entfernen vormerken</button><button data-batch="skip" type="button">Überspringen</button><button data-batch="clear" type="button">Zurücksetzen</button></details></div></details><span id="result-count" class="result-count"></span></div>
         <details class="local-actions work-facets"><summary>Lokale Aktionen</summary><div><label>Lebensbereich <input id="area-entry" maxlength="80"></label><button type="button" id="area-assign">Auswahl zuordnen</button><button type="button" id="local-hide">Hier ausblenden</button><button type="button" id="local-undo">Ausblenden rückgängig</button></div></details>

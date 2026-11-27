@@ -38,7 +38,9 @@ python3 server.py
 
 Öffne [127.0.0.1:8769](http://127.0.0.1:8769/). Die Startseite und [`/reader`](http://127.0.0.1:8769/reader) zeigen dieselbe integrierte Liste. Die früheren Cockpit-Adressen `/cockpit` und `/cockpit.html` führen ebenfalls dorthin. Einstellungen bleiben unter [`/settings`](http://127.0.0.1:8769/settings). Ohne lokale Quellen oder importierte Daten kann die Liste leer sein.
 
-Über **Lesestoff**, **Aufgaben** und **Projekte** wechselst du den Typ direkt. **Filter** blendet Website, Bereich und Format ein; unter **Auswahl** findest du die Sammelaktionen. Bei Leseeinträgen stehen **Behalten** und **Details** direkt am Eintrag; **Weitere** enthält unter anderem Links und **Entfernen vormerken**. Das Vormerken allein ändert die Quelle nicht.
+Für eine Leserunde links ein Hauptthema wählen und bei Bedarf **Gespeichert in**, **Format** und **Originalplattform** über der Liste kombinieren. Mehrfachauswahl innerhalb eines Filters bedeutet ODER, verschiedene Filter werden mit UND kombiniert. Der Speicherort bleibt maßgeblich für den bestätigten Abgleich; ein in Inoreader gesichertes YouTube-Video bleibt ein Inoreader-Eintrag. Die Formaterkennung nutzt vorhandene Metadaten und bekannte Linkadressen; nicht erkennbare Webformate erscheinen als Artikel.
+
+Über **Lesestoff**, **Aufgaben** und **Projekte** wechselst du den Typ direkt. **Filter** blendet Website und Bereich ein; unter **Auswahl** findest du die Sammelaktionen. Bei Leseeinträgen stehen **Behalten** und **Details** direkt am Eintrag; **Weitere** enthält unter anderem Links und **Entfernen vormerken**. Das Vormerken allein ändert die Quelle nicht.
 
 ## Sources / settings setup
 
